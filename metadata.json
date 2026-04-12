@@ -1,0 +1,5 @@
+{
+  "name": "CP Editor & Stress Tester",
+  "description": "A specialized code editor for Competitive Programming featuring testcase management, stress testing, and a VS Code-like terminal.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,36 @@
+{
+    "settings": {
+        "compiler": "g++",
+        "optimization": "O2",
+        "warnings": true,
+        "extraWarnings": true,
+        "fastCompile": true,
+        "outputFile": "solution",
+        "timeLimit": 1000,
+        "memoryLimit": 256,
+        "useSandbox": true
+    },
+    "testcases": [
+        {
+            "id": "741beed2-2a4f-494c-8cc8-83a9b3653d0c",
+            "input": "1 2",
+            "answer": "3",
+            "output": "3\n",
+            "status": "AC"
+        },
+        {
+            "id": "778cbdb6-892b-404f-a9ce-155eb011a276",
+            "input": "3 2",
+            "answer": "5",
+            "output": "5\n",
+            "status": "AC"
+        },
+        {
+            "id": "2473914c-4bad-4b76-8d06-a20877021f7b",
+            "input": "1 1",
+            "answer": "2",
+            "output": "2\n",
+            "status": "AC"
+        }
+    ]
+}

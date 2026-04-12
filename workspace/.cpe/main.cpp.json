@@ -1,0 +1,24 @@
+{
+    "settings": {
+        "compiler": "g++",
+        "optimization": "O2",
+        "warnings": true,
+        "extraWarnings": true,
+        "fastCompile": true,
+        "outputFile": "solution",
+        "timeLimit": 1000,
+        "memoryLimit": 256,
+        "useSandbox": true,
+        "useFileIO": false,
+        "customFileName": ""
+    },
+    "testcases": [
+        {
+            "id": "6fb1a495-a553-4006-93ea-98c85caf7b51",
+            "input": "",
+            "answer": "",
+            "output": "",
+            "status": "pending"
+        }
+    ]
+}
