@@ -392,11 +392,11 @@ if __name__ == "__main__":
     tray_thread.start()
 
     # 2. Tự động mở trình duyệt lần đầu
-    if getattr(sys, 'frozen', False):
-        # Khi đã đóng gói (production build), mở cổng của backend nơi phục vụ frontend
-        Timer(1.5, lambda: webbrowser.open("http://localhost:3691")).start()
-    elif IS_DEV_MODE:
-        # Ở chế độ phát triển, mở cổng của Vite dev server
-        Timer(1.5, lambda: webbrowser.open("http://localhost:3690")).start()
+    # if getattr(sys, 'frozen', False):
+    #     # Khi đã đóng gói (production build), mở cổng của backend nơi phục vụ frontend
+    #     Timer(1.5, lambda: webbrowser.open("http://localhost:3691")).start()
+    # elif IS_DEV_MODE:
+    #     # Ở chế độ phát triển, mở cổng của Vite dev server
+    #     Timer(1.5, lambda: webbrowser.open("http://localhost:3690")).start()
 
     uvicorn.run(app, host="0.0.0.0", port=3691)

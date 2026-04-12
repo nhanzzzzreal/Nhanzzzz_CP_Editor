@@ -13,6 +13,7 @@ export interface TestCase {
   output: string;
   status: TestStatus;
   isExpanded?: boolean;
+  time?: number;
 }
 
 export interface AppSettings {

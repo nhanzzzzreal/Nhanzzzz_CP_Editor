@@ -3,16 +3,22 @@ import json
 import subprocess
 import uuid
 import shutil
+import time
 from typing import List, Optional
 
 from models import Settings, GlobalConfig
 
+# --- HẰNG SỐ ĐỂ ẨN CỬA SỔ TERMINAL ---
 CREATE_NO_WINDOW = 0x08000000
 
 def execute_code_stream(path: str, code: str, testcases: List[dict], settings: Settings, global_config: Optional[GlobalConfig] = None, workspace_dir: str = "workspace"):
     python_cmd = global_config.pythonPath if global_config else "python"
     gpp_cmd = global_config.gppPath if global_config else "g++"
     is_python = "python" in settings.compiler.lower()
+    
+    # --- ĐẢM BẢO ĐƯỜNG DẪN ĐẾN RUNNER.EXE LÀ TUYỆT ĐỐI ---
+    # Giả định runner.exe nằm ở thư mục gốc của project (cùng cấp với file chạy python chính)
+    runner_exe_path = os.path.join(os.getcwd(), "runner.exe")
     
     # 1. Nhận diện file ảo
     is_temp_file = path.startswith("temp") and not os.path.isabs(path)
@@ -39,12 +45,11 @@ def execute_code_stream(path: str, code: str, testcases: List[dict], settings: S
         os.makedirs(run_workspace, exist_ok=True)
     
     try:
-        # 2. LUÔN GHI CODE VÀO 1 FILE THẬT TRONG RUN_WORKSPACE ĐỂ COMPILER ĐỌC ĐƯỢC
+        # 2. GHI CODE VÀO FILE THẬT
         src_file = os.path.join(run_workspace, file_name)
         with open(src_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(code)
 
-        # Cập nhật file gốc (nếu là file thật có trên ổ cứng)
         if not is_temp_file and os.path.exists(path) and src_file != path:
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(code)
@@ -56,14 +61,13 @@ def execute_code_stream(path: str, code: str, testcases: List[dict], settings: S
         else: # C++ Compilation
             exe_file = os.path.join(run_workspace, f"{base_name}.exe" if os.name == 'nt' else base_name)
             
-            # 3. FIX LỖI: Sử dụng đường dẫn vật lý (src_file) thay vì đường dẫn ảo (path)
             compile_cmd = [gpp_cmd, src_file]
-            
             if settings.optimization != "O0": compile_cmd.append(f"-{settings.optimization}")
             if settings.warnings: compile_cmd.append("-Wall")
             if settings.extraWarnings: compile_cmd.append("-Wextra")
             compile_cmd.extend(["-o", exe_file])
             
+            # Vẫn dùng CREATE_NO_WINDOW để ẩn terminal khi biên dịch
             proc = subprocess.run(compile_cmd, capture_output=True, text=True, cwd=run_workspace, creationflags=CREATE_NO_WINDOW)
             
             yield json.dumps({"type": "compile_finish", "log": proc.stderr}) + "\n"
@@ -75,50 +79,148 @@ def execute_code_stream(path: str, code: str, testcases: List[dict], settings: S
             
             cmd = [f"./{os.path.basename(exe_file)}" if os.name != 'nt' else exe_file]
 
-        # Vòng lặp chạy từng Testcase
+        # Đường dẫn in/out (nếu dùng File IO)
         inp_file = os.path.join(run_workspace, f"{io_base_name}.inp")
         out_file = os.path.join(run_workspace, f"{io_base_name}.out")
 
+        # 3. VÒNG LẶP CHẠY TỪNG TESTCASE QUA RUNNER.EXE
+        all_results = []
         for tc in testcases:
+            result_to_yield = None
             try:
                 timeout_sec = settings.timeLimit / 1000.0
-                
+                memory_limit_mb = getattr(settings, 'memoryLimit', 256)
+
                 if settings.useFileIO:
-                    with open(inp_file, "w", encoding="utf-8", newline="\n") as f: f.write(tc["input"])
-                    if os.path.exists(out_file): os.remove(out_file)
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec, cwd=run_workspace, creationflags=CREATE_NO_WINDOW)
-                else:
-                    proc = subprocess.run(cmd, input=tc["input"], capture_output=True, text=True, timeout=timeout_sec, cwd=run_workspace, creationflags=CREATE_NO_WINDOW)
+                    with open(inp_file, "w", encoding="utf-8", newline="\n") as f: 
+                        f.write(tc["input"])
+                    if os.path.exists(out_file): 
+                        os.remove(out_file)
+
+                # Chuyển lệnh gốc thành string để truyền cho C++ Runner
+                cmd_str = " ".join(cmd)
                 
-                if proc.returncode != 0:
-                    status = "RE" 
-                    out_text = proc.stdout.strip() + "\n" + proc.stderr.strip()
+                # Cấu hình gọi runner.exe
+                runner_cmd = [
+                    runner_exe_path,
+                    "--time", str(settings.timeLimit),
+                    "--mem", str(memory_limit_mb),
+                    "--cmd", cmd_str
+                ]
+                
+                # Gọi C++ Runner
+                proc = subprocess.Popen(
+                    runner_cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=run_workspace,
+                    creationflags=CREATE_NO_WINDOW # Ẩn cửa sổ Console của Runner
+                )
+                
+                input_data = "" if settings.useFileIO else tc["input"]
+                
+                # Đợi kết quả trả về. Ta cho thêm 1.0s vì bản thân runner.exe đã tự quản lý timeout.
+                out_stdout, out_stderr = proc.communicate(input=input_data, timeout=timeout_sec + 1.0)
+                
+                # Phân tích kết quả từ Runner
+                lines = (out_stdout or "").strip().splitlines()
+                runner_result = None
+                actual_stdout = ""
+                
+                if lines:
+                    try:
+                        # Runner.exe luôn in JSON ở dòng cuối cùng
+                        runner_result = json.loads(lines[-1])
+                        # Những dòng trước đó là output thực tế của code (nếu Standard IO)
+                        actual_stdout = "\n".join(lines[:-1])
+                    except json.JSONDecodeError:
+                        actual_stdout = "\n".join(lines)
+                        runner_result = {"status": "RE", "error_msg": "Không thể parse JSON từ runner", "time_ms": 0}
                 else:
+                    runner_result = {"status": "RE", "error_msg": "Runner không trả về kết quả", "time_ms": 0}
+
+                # Trích xuất dữ liệu
+                runner_status = runner_result.get("status", "RE")
+                exec_time = runner_result.get("time_ms", 0)
+                error_msg = runner_result.get("error_msg", "")
+                
+                # Ghép thêm stderr của child process nếu có lỗi
+                if out_stderr and not error_msg:
+                    error_msg = out_stderr.strip()
+
+                # Kiểm tra trạng thái do Runner đánh giá (TLE/RE)
+                if runner_status != "AC":
+                    status = runner_status
+                    out_text = actual_stdout + "\n" + error_msg
+                    # Nếu runner báo TLE, thời gian trả về phải là time limit, không phải thời gian thực tế đã chạy
+                    if status == "TLE":
+                        exec_time = settings.timeLimit
+                else:
+                    # Nếu Runner đánh giá code chạy xong bình thường (AC), ta đi check kết quả đúng/sai
                     if settings.useFileIO:
-                        out_text = open(out_file, "r", encoding="utf-8").read().strip() if os.path.exists(out_file) else "Error: .out not found"
+                        out_text = open(out_file, "r", encoding="utf-8").read().strip() if os.path.exists(out_file) else "Error: .out không tìm thấy"
                     else:
-                        out_text = proc.stdout.strip()
+                        out_text = actual_stdout.strip()
 
                     actual_output = out_text.strip()
                     expected_answer = tc["answer"].strip()
 
-                    # So sánh sau khi đã loại bỏ mọi dấu xuống dòng/khoảng trắng thừa
                     if not expected_answer:
-                        status = "AC" # Nếu không có đáp án mẫu, coi như qua
+                        status = "AC" 
                     elif actual_output == expected_answer:
                         status = "AC"
                     else:
                         status = "WA"
                     
-                # Gửi kết quả của 1 testcase này về ngay lập tức
-                yield json.dumps({"type": "test_result", "result": {
-                    "id": tc["id"], "output": out_text, "status": status, "error_log": proc.stderr
-                }}) + "\n"
+                result_to_yield = {
+                    "id": tc["id"], "output": out_text, "status": status, "error_log": error_msg, "time": int(exec_time)
+                }
                 
             except subprocess.TimeoutExpired:
-                yield json.dumps({"type": "test_result", "result": {"id": tc["id"], "output": "", "status": "TLE", "error_log": "Time Limit Exceeded"}}) + "\n"
+                # Fallback cuối cùng nếu runner.exe bị treo
+                proc.kill()
+                proc.communicate()
+                result_to_yield = {"id": tc["id"], "output": "", "status": "TLE", "error_log": "Time Limit Exceeded (Python Timeout)", "time": settings.timeLimit}
             except Exception as e:
-                yield json.dumps({"type": "test_result", "result": {"id": tc["id"], "output": "", "status": "RE", "error_log": str(e)}}) + "\n"
+                result_to_yield = {"id": tc["id"], "output": "", "status": "RE", "error_log": f"System Error: {str(e)}", "time": -1}
+            
+            if result_to_yield:
+                all_results.append(result_to_yield)
+                yield json.dumps({"type": "test_result", "result": result_to_yield}) + "\n"
+
+        # --- LOGIC ĐỂ LƯU KẾT QUẢ VÀO FILE .CPE ---
+        # Sau khi chạy xong tất cả testcase, ta chủ động ghi kết quả vào file .cpe
+        # để đảm bảo dữ liệu được lưu trữ bền bỉ ngay lập tức.
+        if not is_temp_file and all_results:
+            data_file_path = path + ".cpe"
+            try:
+                # Chỉ cập nhật file đã tồn tại. Nếu chưa có, client sẽ tạo ra sau.
+                if os.path.exists(data_file_path):
+                    with open(data_file_path, 'r', encoding='utf-8') as f:
+                        file_data = json.load(f)
+
+                    if 'testcases' in file_data and isinstance(file_data['testcases'], list):
+                        results_map = {res['id']: res for res in all_results}
+                        was_updated = False
+                        for i, tc_from_file in enumerate(file_data['testcases']):
+                            tc_id = tc_from_file.get('id')
+                            if tc_id in results_map:
+                                new_result = results_map[tc_id]
+                                file_data['testcases'][i]['output'] = new_result.get('output', '')
+                                file_data['testcases'][i]['status'] = new_result.get('status', 'pending')
+                                file_data['testcases'][i]['time'] = new_result.get('time', -1)
+                                was_updated = True
+                        
+                        if was_updated:
+                            with open(data_file_path, 'w', encoding='utf-8') as f:
+                                json.dump(file_data, f, indent=2)
+                            # Gửi tín hiệu báo client rằng file đã được lưu thành công
+                            yield json.dumps({"type": "results_saved", "path": path}) + "\n"
+            except Exception as e:
+                # Gửi log lỗi về client nếu không lưu được file
+                yield json.dumps({"type": "log", "log": f"Server Error: Could not save results to .cpe file: {str(e)}"}) + "\n"
                 
     finally:
         if is_sandbox and os.path.exists(run_workspace):

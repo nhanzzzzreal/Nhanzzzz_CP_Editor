@@ -8,6 +8,7 @@ import {
   TreeItem, TreeItemRenderContext,
   TreeItemIndex,
 } from 'react-complex-tree';
+import { useQueryClient } from '@tanstack/react-query';
 import 'react-complex-tree/lib/style.css';
 import { PanelGroup, Panel, PanelResizeHandle, ImperativePanelHandle } from 'react-resizable-panels';
 import { useDebouncedCallback } from 'use-debounce';
@@ -78,7 +79,7 @@ export default function App() {
   }, []);
 
   const [testcases, setTestcases] = useState<TestCase[]>([
-    { id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true }
+    { id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 }
   ]);
 
   const toggleTestCase = (id: string) => {
@@ -97,6 +98,7 @@ export default function App() {
   const [currentSelecting, setCurrentSelecting] = useState<'brute' | 'ac' | 'gen' | null>(null);
 
   // TanStack Query Hooks
+  const queryClient = useQueryClient();
   const { data: globalConfig, isLoading: isGlobalConfigLoading } = useGlobalConfigQuery();
   const { data: fileTree = [], isLoading: isFileTreeLoading, refetch: refreshTree } = useFileTreeQuery();
   const { data: fileData, isLoading: isFileLoading } = useFileDataQuery(activeFileId);
@@ -250,14 +252,14 @@ export default function App() {
   }, [openFileIds, activeFileId, debouncedSaveGlobalConfig]);
 
   const addTestCase = () => {
-    setTestcases(prev => [...prev, { id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending' }]);
+    setTestcases(prev => [...prev, { id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', time: -1 }]);
   };
 
   const removeTestCase = (id: string) => {
     if (testcases.length > 1) {
       setTestcases(prev => prev.filter(tc => tc.id !== id));
     } else {
-      setTestcases([{ id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending' }]);
+      setTestcases([{ id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', time: -1 }]);
     }
   };
 
@@ -283,7 +285,7 @@ export default function App() {
     const isPython = settings.compiler.toLowerCase().includes('python');
     setRunStatus(isPython ? 'running' : 'compiling');
     addLog(`Running single testcase #${testcases.findIndex(t => t.id === id) + 1}...`);
-    setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'running', output: '' } : t));
+    setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'running', output: '', time: undefined } : t));
 
     runCodeMutation.mutate({
           path: activeFileId,
@@ -319,9 +321,14 @@ export default function App() {
                   if (data.log) addLog(`Compiler Log:\n${data.log}`);
                 } else if (data.type === 'test_result') {
                   const res = data.result;
-                  const finalStatus = res.status === 'AC' && res.output.trim() !== tc.answer.trim() ? 'WA' : res.status;
-                  setTestcases(prev => prev.map(t => t.id === res.id ? { ...t, output: res.output, status: finalStatus } : t));
-                  addLog(`Single testcase finished: ${finalStatus}`);
+                  setTestcases(prev => prev.map(t => {
+                    if (t.id !== res.id) return t;
+                    const normalize = (s: string) => s.replace(/\r?\n|\r/g, "\n").trim();
+                    const isCorrect = !t.answer || normalize(res.output) === normalize(t.answer);
+                    const finalStatus = res.status === 'AC' && !isCorrect ? 'WA' : res.status;
+                    return { ...t, output: res.output, status: finalStatus, time: res.time };
+                  }));
+                  addLog(`Single testcase finished.`);
                 }
               } catch (e) {
                 console.error("JSON parse error:", e, line);
@@ -335,7 +342,7 @@ export default function App() {
       },
       onError: (error: any) => {
         addLog(`Error running testcase: ${error.message}`);
-        setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'RE' } : t));
+        setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'RE', output: `Client/Network Error: ${error.message}` } : t));
         setRunStatus('idle'); // Set idle nếu có lỗi mạng
       }
     });
@@ -355,7 +362,7 @@ export default function App() {
     const isPython = settings.compiler.toLowerCase().includes('python');
     setRunStatus(isPython ? 'running' : 'compiling');
     addLog(`Starting execution...`);
-    setTestcases(prev => prev.map(tc => ({ ...tc, status: 'pending', output: '' })));
+    setTestcases(prev => prev.map(tc => ({ ...tc, status: 'running', output: '', time: undefined })));
     setCurrentTestIndex(0);
 
     runCodeMutation.mutate({
@@ -403,13 +410,18 @@ export default function App() {
                       
                       const finalStatus = res.status === 'AC' && !isCorrect ? 'WA' : res.status;
 
-                      return { ...tc, output: res.output, status: finalStatus };
+                      return { ...tc, output: res.output, status: finalStatus, time: res.time };
                     }
                     return tc;
                   }));
                   // FIX 2: Tăng biến đếm và set state
                   completedTests++;
                   setCurrentTestIndex(completedTests);
+                } else if (data.type === 'results_saved') {
+                  addLog('All results saved on server. State synchronized.');
+                  queryClient.invalidateQueries({ queryKey: ['fileData', data.path] });
+                } else if (data.type === 'log') {
+                  addLog(data.log);
                 }
               } catch (e) {
                 console.error("JSON Parse error:", e, line);
@@ -420,13 +432,25 @@ export default function App() {
         } finally {
           // FIX 3: Luôn đưa trạng thái về idle khi luồng stream kết thúc hoàn toàn
           setRunStatus('idle');
+          // Sau khi luồng kết thúc, rà soát lại các testcase.
+          // Nếu có testcase nào vẫn còn ở trạng thái 'running', điều đó có nghĩa là
+          // kết quả của nó đã không được gửi về từ backend.
+          // Ta sẽ đánh dấu nó là RE để người dùng biết đã có lỗi xảy ra.
+          setTestcases(prev => prev.map(tc => 
+            tc.status === 'running' 
+              ? { ...tc, status: 'RE', output: (tc.output || '') + "\nError: The execution result was not received from the backend." } 
+              : tc
+          ));
         }
       },
       onError: (error: any) => {
         addLog(`Error: ${error.message}`);
         setRunStatus('idle'); // Set idle nếu có lỗi mạng
+        // Nếu có lỗi mạng ngay từ đầu, tất cả các testcase đang chạy sẽ được đánh dấu là RE
+        setTestcases(prev => prev.map(tc => 
+          tc.status === 'running' ? { ...tc, status: 'RE', output: `Client/Network Error: ${error.message}` } : tc
+        ));
       }
-      // XÓA onSettled ở dưới đi vì ta đã dùng block finally rồi
     });
   };
 
@@ -466,7 +490,8 @@ export default function App() {
         answer: data.out || '',
         output: '',
         status: 'pending',
-        isExpanded: false
+        isExpanded: false,
+        time: -1
       }));
 
     if (loadedTestcases.length > 0) {
@@ -573,37 +598,46 @@ export default function App() {
   const isLoadingDataRef = useRef(false);
 
   useEffect(() => {
+    // 1. Xử lý trường hợp không có file nào được chọn: reset về trạng thái mặc định.
     if (!activeFileId) {
       setEditorContent('');
+      setTestcases([{ id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 }]);
       return;
     }
-    
-    if (fileData) {
-      // Bật cờ khóa để chặn auto-save
-      isLoadingDataRef.current = true;
 
-      setEditorContent(fileData.content || '');
-      if (fileData.settings) {
-        setSettings(fileData.settings);
-      } else {
-        const isPy = activeFileId.endsWith('.py');
-        setSettings(prev => ({ ...prev, compiler: isPy ? 'python' : 'g++' }));
-      }
-      if (fileData.testcases && fileData.testcases.length > 0) {
-        setTestcases(fileData.testcases.map((tc: any) => ({
-          ...tc,
-          input: tc.input ? tc.input.trim() : '',
-          answer: tc.answer ? tc.answer.trim() : '',
-          isExpanded: false
-        })));
-      } else {
-        setTestcases([{ id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true }]);
-      }
-
-      // Tắt cờ khóa sau khi render xong
-      setTimeout(() => { isLoadingDataRef.current = false; }, 500);
+    // 2. Khi đang tải file mới (isFileLoading), reset testcases để tránh hiển thị dữ liệu cũ.
+    if (isFileLoading) {
+      setTestcases([]);
+      return;
     }
-  }, [activeFileId, fileData]);
+
+    // 3. Khi đã tải xong (isFileLoading là false), cập nhật state từ fileData.
+    isLoadingDataRef.current = true; // Chặn auto-save ngay sau khi load
+
+    setEditorContent(fileData?.content || '');
+
+    if (fileData?.settings) {
+      setSettings(fileData.settings);
+    } else {
+      const isPy = activeFileId.endsWith('.py');
+      setSettings(prev => ({ ...prev, compiler: isPy ? 'python' : 'g++' }));
+    }
+
+    if (fileData?.testcases && fileData.testcases.length > 0) {
+      // Dùng spread (...) để đảm bảo tất cả các trường đã lưu (status, output, time) được giữ lại.
+      setTestcases(fileData.testcases.map((tc: TestCase) => ({
+        ...tc,
+        isExpanded: false, // Luôn thu gọn test case khi tải file mới
+      })));
+    } else {
+      // Nếu không có testcase nào, reset về trạng thái mặc định.
+      setTestcases([{ id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 }]);
+    }
+
+    // Tắt cờ khóa sau một khoảng trễ để cho phép auto-save hoạt động lại.
+    setTimeout(() => { isLoadingDataRef.current = false; }, 500);
+
+  }, [activeFileId, fileData, isFileLoading]);
 
   // Khối auto-save giờ đây đã bị chặn bởi isLoadingDataRef
   useEffect(() => {

@@ -75,6 +75,11 @@ export const TestCaseItem = React.memo(({
           </button>
           <span className="text-xs font-bold text-gray-500">#{index + 1}</span>
           <StatusBadge status={tc.status} />
+          {tc.time !== undefined && tc.time >= 0 && tc.status !== 'pending' && tc.status !== 'running' && (
+            <span className="text-xs font-mono text-gray-500">
+              ({tc.status === 'TLE' ? `${tc.time}+` : tc.time}ms)
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button

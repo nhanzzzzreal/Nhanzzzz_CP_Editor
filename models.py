@@ -51,6 +51,7 @@ class TestCase(BaseModel):
     answer: str
     output: Optional[str] = ""
     status: Optional[str] = "pending"
+    time: Optional[int] = -1
 
 class FileDataSaveReq(BaseModel):
     path: str

@@ -1,16 +1,27 @@
 {
-    "lastWorkspace": "Z:\\nhanzzzzIDE\\workspace",
+    "lastWorkspace": "Z:\\CP",
     "gppPath": "g++",
     "pythonPath": "python",
-    "autoSaveDelay": 1500,
+    "autoSaveDelay": 5000,
     "editorFontSize": 14,
-    "editorFontFamily": "'JetBrains Mono', 'Fira Code', monospace",
+    "editorFontFamily": "Consolas, 'Courier New', monospace",
     "appVersion": "v1.0.0",
     "openFileIds": [
-        "Z:/nhanzzzzIDE/workspace/main.cpp"
+        "Z:/CP/Basic/quaylui/caitui/caitui.py",
+        "Z:/CP/Problems/qmax/qmax.cpp",
+        "Z:/CP/working/aplusb.cpp"
     ],
-    "activeFileId": "Z:/nhanzzzzIDE/workspace/main.cpp",
-    "treeState": {},
-    "snippets": [],
+    "activeFileId": "Z:/CP/working/aplusb.cpp",
+    "treeState": {
+        "Z:/CP/temp": true,
+        "Z:/CP/marisa": true
+    },
+    "snippets": [
+        {
+            "id": "1ab39739-5102-4427-bf39-1454a0017aad",
+            "name": "main",
+            "content": "// nhanzzzz - THPT Xuan Loc\n#include <bits/stdc++.h>\n#define int long long\n#define endl \"\\n\"\n#define task \"main\"\nusing namespace std;\n//\n\n\nsigned main(){\n    ios::sync_with_stdio(0); cin.tie(0); cout.tie(0);\n    if(fopen(task\".inp\",\"r\")){\n        freopen(task\".inp\",\"r\",stdin);\n        freopen(task\".out\",\"w\",stdout);\n    }\n    //\n    \n\n}"
+        }
+    ],
     "snippetShortcut": "Ctrl+Shift+P"
 }
