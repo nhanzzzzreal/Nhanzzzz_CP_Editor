@@ -14,7 +14,7 @@ import { PanelGroup, Panel, PanelResizeHandle, ImperativePanelHandle } from 'rea
 import { useDebouncedCallback } from 'use-debounce';
 
 import { cn } from './lib/utils';
-import { AppSettings, FileNode, FileState, GlobalConfig, TestCase } from './types';
+import { AppSettings, FileNode, FileState, GlobalConfig, TestCase, CppSettings, PythonSettings } from './types';
 import { useAppStore } from './store';
 import { useCreateItemMutation, useDeleteItemMutation, useFileDataQuery, useFileTreeQuery, useGlobalConfigQuery, useOpenFileDialogMutation, useOpenWorkspaceMutation, useRenameItemMutation, useRunCodeMutation, useSaveFileContentMutation, useSaveFileDataMutation, useSaveGlobalConfigMutation } from './api';
 
@@ -58,19 +58,19 @@ export default function App() {
   
   // Refs
   const editorRef = useRef<any>(null); 
-  const [settings, setSettings] = useState<AppSettings>({
+  const [settings, setSettings] = useState<AppSettings>(
+    { // Default to CppSettings
     compiler: 'g++',
     optimization: 'O2',
     warnings: true,
     extraWarnings: true,
-    fastCompile: true,
+    std: 'c++14', // New C++ specific setting
     timeLimit: 1000,
     memoryLimit: 256,
     useSandbox: true,
     useFileIO: true,
     customFileName: '',
-    outputFile: 'solution',
-  });
+  } as CppSettings); // Cast for initial state
 
   useEffect(() => {
     const handleClick = () => hideContextMenu();
@@ -93,6 +93,9 @@ export default function App() {
   const [bruteFile, setBruteFile] = useState<FileState | null>(null);
   const [acFile, setAcFile] = useState<FileState | null>(null);
   const [genFile, setGenFile] = useState<FileState | null>(null);
+
+  // Helper to determine if the active file is Python
+  const isPythonFile = useMemo(() => activeFileId.endsWith('.py'), [activeFileId]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentSelecting, setCurrentSelecting] = useState<'brute' | 'ac' | 'gen' | null>(null);
@@ -282,7 +285,7 @@ export default function App() {
       return;
     }
 
-    const isPython = settings.compiler.toLowerCase().includes('python');
+    const isPython = (settings as any).compiler.toLowerCase().includes('python'); // Check compiler from current settings
     setRunStatus(isPython ? 'running' : 'compiling');
     addLog(`Running single testcase #${testcases.findIndex(t => t.id === id) + 1}...`);
     setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'running', output: '', time: undefined } : t));
@@ -359,7 +362,7 @@ export default function App() {
       return;
     }
 
-    const isPython = settings.compiler.toLowerCase().includes('python');
+    const isPython = (settings as any).compiler.toLowerCase().includes('python'); // Check compiler from current settings
     setRunStatus(isPython ? 'running' : 'compiling');
     addLog(`Starting execution...`);
     setTestcases(prev => prev.map(tc => ({ ...tc, status: 'running', output: '', time: undefined })));
@@ -616,14 +619,27 @@ export default function App() {
 
     setEditorContent(fileData?.content || '');
 
-    if (fileData?.settings) {
-      setSettings(fileData.settings);
+    if (fileData?.settings) { // Ensure the loaded settings match the expected type
+      if (isPythonFile) {
+        setSettings(fileData.settings as PythonSettings);
+      } else {
+        setSettings(fileData.settings as CppSettings);
+      }
     } else {
-      const isPy = activeFileId.endsWith('.py');
-      setSettings(prev => ({ ...prev, compiler: isPy ? 'python' : 'g++' }));
+      // If no settings are found, initialize with defaults based on file type
+      if (isPythonFile) {
+        setSettings({
+          compiler: 'python', timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '',
+        } as PythonSettings);
+      } else {
+        setSettings({
+          compiler: 'g++', optimization: 'O2', warnings: true, extraWarnings: true, std: 'c++14',
+          timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '',
+        } as CppSettings);
+      }
     }
-
-    if (fileData?.testcases && fileData.testcases.length > 0) {
+    
+    if (fileData?.testcases && fileData.testcases.length > 0) { // Dùng spread (...) để đảm bảo tất cả các trường đã lưu (status, output, time) được giữ lại.
       // Dùng spread (...) để đảm bảo tất cả các trường đã lưu (status, output, time) được giữ lại.
       setTestcases(fileData.testcases.map((tc: TestCase) => ({
         ...tc,
@@ -637,7 +653,7 @@ export default function App() {
     // Tắt cờ khóa sau một khoảng trễ để cho phép auto-save hoạt động lại.
     setTimeout(() => { isLoadingDataRef.current = false; }, 500);
 
-  }, [activeFileId, fileData, isFileLoading]);
+  }, [activeFileId, fileData, isFileLoading, isPythonFile]);
 
   // Khối auto-save giờ đây đã bị chặn bởi isLoadingDataRef
   useEffect(() => {
@@ -1259,7 +1275,7 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         setSettings={setSettings}
-        activeFileId={activeFileId}
+        isPythonFile={isPythonFile} // Pass a prop to indicate file type
       />
 
       {globalConfig && (

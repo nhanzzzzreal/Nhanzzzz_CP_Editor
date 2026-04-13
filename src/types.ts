@@ -16,19 +16,30 @@ export interface TestCase {
   time?: number;
 }
 
-export interface AppSettings {
-  compiler: string;
-  optimization: 'O0' | 'O1' | 'O2' | 'O3';
-  warnings: boolean;
-  extraWarnings: boolean;
-  fastCompile: boolean;
-  outputFile: string;
+// Common settings for both C++ and Python
+export interface CompileAndRunSettings {
   timeLimit: number;
   memoryLimit: number;
   useSandbox: boolean;
   useFileIO: boolean;
   customFileName: string;
 }
+
+export interface CppSettings extends CompileAndRunSettings {
+  compiler: string; // e.g., 'g++'
+  optimization: 'O0' | 'O1' | 'O2' | 'O3';
+  warnings: boolean;
+  extraWarnings: boolean;
+  std: 'c++11' | 'c++14' | 'c++17' | 'c++20' | 'c++23';
+}
+
+export interface PythonSettings extends CompileAndRunSettings {
+  compiler: string; // e.g., 'python'
+  // No specific Python-only settings for now, but can be added here later
+}
+
+// Union type for settings
+export type AppSettings = CppSettings | PythonSettings;
 
 export interface FileNode {
   id: string;

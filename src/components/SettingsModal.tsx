@@ -1,18 +1,30 @@
-import React from 'react';
+import React, { Dispatch, SetStateAction } from 'react';
 import { Settings as SettingsIcon, X } from 'lucide-react';
-import { AppSettings } from '../types';
+import { AppSettings, CppSettings, PythonSettings } from '../types'; // Import all relevant types
 import { cn } from '../lib/utils';
 
-export const SettingsModal = ({ isOpen, onClose, settings, setSettings, activeFileId }: {
-  isOpen: boolean,
-  onClose: () => void,
-  settings: AppSettings,
-  setSettings: (s: AppSettings) => void,
-  activeFileId: string
-}) => {
+interface SettingsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  settings: AppSettings;
+  setSettings: Dispatch<SetStateAction<AppSettings>>; // Corrected type to accept functional updates
+  isPythonFile: boolean; // New prop to differentiate
+}
+
+export const SettingsModal = ({ isOpen, onClose, settings, setSettings, isPythonFile }: SettingsModalProps) => {
   if (!isOpen) return null;
 
-  const isPython = activeFileId.endsWith('.py');
+  // Cast settings to the specific type for easier access
+  const currentSettings = isPythonFile ? (settings as PythonSettings) : (settings as CppSettings);
+
+  // Handle changes for common settings
+  const handleCommonChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value, type, checked } = e.target as HTMLInputElement;
+    setSettings(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : (type === 'number' ? parseInt(value) : value),
+    }) as AppSettings); // Cast back to AppSettings
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -20,7 +32,7 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, activeFi
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#333] bg-[#1e1e1e]">
           <div className="flex items-center gap-2 font-bold text-sm tracking-wide">
             <SettingsIcon size={18} className="text-blue-400" />
-            COMPILER SETTINGS
+            {isPythonFile ? 'PYTHON SETTINGS' : 'C++ SETTINGS'}
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors">
             <X size={20} />
@@ -33,19 +45,21 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, activeFi
               <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">Compiler Command</label>
               <input
                 type="text"
-                value={settings.compiler}
-                onChange={(e) => setSettings({ ...settings, compiler: e.target.value })}
+                value={currentSettings.compiler}
+                onChange={handleCommonChange} // Use common handler
+                name="compiler" // Add name attribute
                 className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors"
               />
             </div>
 
-            {/* ẨN OPTION NÀY NẾU LÀ PYTHON */}
-            {!isPython && (
+            {/* C++ Specific Settings */}
+            {!isPythonFile && (
               <div>
                 <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">Optimization</label>
                 <select
-                  value={settings.optimization}
-                  onChange={(e) => setSettings({ ...settings, optimization: e.target.value as any })}
+                  value={(currentSettings as CppSettings).optimization}
+                  onChange={handleCommonChange}
+                  name="optimization"
                   className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors appearance-none"
                 >
                   <option value="O0">-O0 (None)</option>
@@ -56,37 +70,58 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, activeFi
               </div>
             )}
 
+            {!isPythonFile && (
+              <div>
+                <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">C++ Standard</label>
+                <select
+                  value={(currentSettings as CppSettings).std}
+                  onChange={handleCommonChange}
+                  name="std"
+                  className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors appearance-none"
+                >
+                  <option value="c++11">C++11</option>
+                  <option value="c++14">C++14</option>
+                  <option value="c++17">C++17</option>
+                  <option value="c++20">C++20</option>
+                  <option value="c++23">C++23</option>
+                </select>
+              </div>
+            )}
+
             <div className="flex flex-col gap-3 pt-2">
               {/* SANBOX OPTION */}
               <label className="flex items-center gap-3 cursor-pointer group">
                 <input
                   type="checkbox"
-                  checked={settings.useSandbox ?? true}
-                  onChange={(e) => setSettings({ ...settings, useSandbox: e.target.checked })}
+                  checked={currentSettings.useSandbox ?? true}
+                  onChange={handleCommonChange}
+                  name="useSandbox"
                   className="w-4 h-4 rounded border-[#3c3c3c] bg-[#1e1e1e] text-blue-600 focus:ring-0"
                 />
-                <span className="text-sm text-gray-300 group-hover:text-white transition-colors">Use Sandbox (Dọn dẹp file tự động)</span>
+                <span className="text-sm text-gray-300 group-hover:text-white transition-colors">Use Sandbox (Run in Temp folder)</span>
               </label>
 
               {/* FILE I/O OPTION */}
               <label className="flex items-center gap-3 cursor-pointer group">
                 <input
                   type="checkbox"
-                  checked={settings.useFileIO ?? true}
-                  onChange={(e) => setSettings({ ...settings, useFileIO: e.target.checked })}
+                  checked={currentSettings.useFileIO ?? true}
+                  onChange={handleCommonChange}
+                  name="useFileIO"
                   className="w-4 h-4 rounded border-[#3c3c3c] bg-[#1e1e1e] text-blue-600 focus:ring-0"
                 />
                 <span className="text-sm text-gray-300 group-hover:text-white transition-colors">File I/O</span>
               </label>
 
-              {/* ẨN WARNINGS NẾU LÀ PYTHON */}
-              {!isPython && (
+              {/* C++ Specific Warnings */}
+              {!isPythonFile && (
                 <>
                   <label className="flex items-center gap-3 cursor-pointer group">
                     <input
                       type="checkbox"
-                      checked={settings.warnings}
-                      onChange={(e) => setSettings({ ...settings, warnings: e.target.checked })}
+                      checked={(currentSettings as CppSettings).warnings}
+                      onChange={handleCommonChange}
+                      name="warnings"
                       className="w-4 h-4 rounded border-[#3c3c3c] bg-[#1e1e1e] text-blue-600 focus:ring-0"
                     />
                     <span className="text-sm text-gray-300 group-hover:text-white transition-colors">Enable Warnings (-Wall)</span>
@@ -94,8 +129,9 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, activeFi
                   <label className="flex items-center gap-3 cursor-pointer group">
                     <input
                       type="checkbox"
-                      checked={settings.extraWarnings}
-                      onChange={(e) => setSettings({ ...settings, extraWarnings: e.target.checked })}
+                      checked={(currentSettings as CppSettings).extraWarnings}
+                      onChange={handleCommonChange}
+                      name="extraWarnings"
                       className="w-4 h-4 rounded border-[#3c3c3c] bg-[#1e1e1e] text-blue-600 focus:ring-0"
                     />
                     <span className="text-sm text-gray-300 group-hover:text-white transition-colors">Extra Warnings (-Wextra)</span>
@@ -104,7 +140,7 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, activeFi
               )}
             </div>
 
-            <div className={cn("transition-all duration-300", settings.useFileIO ? "opacity-100 h-auto" : "opacity-0 h-0 overflow-hidden")}>
+            <div className={cn("transition-all duration-300", currentSettings.useFileIO ? "opacity-100 h-auto" : "opacity-0 h-0 overflow-hidden")}>
               <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">
                 I/O Filename (Optional)
               </label>
@@ -112,8 +148,9 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, activeFi
                 <input
                   type="text"
                   placeholder="Default: Same as code"
-                  value={settings.customFileName || ''}
-                  onChange={(e) => setSettings({ ...settings, customFileName: e.target.value })}
+                  value={currentSettings.customFileName || ''}
+                  onChange={handleCommonChange}
+                  name="customFileName"
                   className="flex-1 bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors"
                 />
                 <div className="text-xs text-gray-500 font-mono">.inp / .out</div>
@@ -125,21 +162,22 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, activeFi
                 <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">Time Limit (ms)</label>
                 <input
                   type="number"
-                  value={settings.timeLimit}
-                  onChange={(e) => setSettings({ ...settings, timeLimit: parseInt(e.target.value) })}
+                  value={currentSettings.timeLimit}
+                  onChange={handleCommonChange}
+                  name="timeLimit"
                   className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors"
                 />
               </div>
               <div>
-                <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider flex items-center justify-between">
+                <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">
                   Memory Limit (MB)
-                  <span className="text-red-400 text-[8px]">(Disabled)</span>
                 </label>
                 <input
                   type="number"
-                  disabled
-                  value={settings.memoryLimit}
-                  className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm outline-none opacity-50 cursor-not-allowed"
+                  value={currentSettings.memoryLimit}
+                  name="memoryLimit"
+                  onChange={handleCommonChange}
+                  className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors"
                 />
               </div>
             </div>

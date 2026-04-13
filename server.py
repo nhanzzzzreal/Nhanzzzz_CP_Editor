@@ -3,11 +3,11 @@ import json
 import subprocess
 import shutil
 import sys
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from models import GlobalConfig, CreateItemReq, RenameItemReq, FileDataSaveReq, FileContentSaveReq, RunAllReq
+from models import GlobalConfig, CreateItemReq, RenameItemReq, FileDataSaveReq, FileContentSaveReq, RunAllReq, CppSettings, PythonSettings
 from services import execute_code_stream
 
 import threading
@@ -293,12 +293,28 @@ def get_file_data(path: str):
     meta_path = get_meta_file_path(path)
     settings = None
     testcases = []
+    
+    is_python_file = path.endswith(".py")
+    is_cpp_file = path.endswith(".cpp") or path.endswith(".c")
 
     if os.path.exists(meta_path):
         with open(meta_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             settings = data.get("settings")
+            if settings:
+                if is_python_file:
+                    settings = PythonSettings(**settings)
+                elif is_cpp_file:
+                    settings = CppSettings(**settings)
             testcases = data.get("testcases", [])
+    else:
+        # Provide default settings if no meta file exists
+        if is_python_file:
+            settings = PythonSettings(timeLimit=1000, memoryLimit=256, useSandbox=True, useFileIO=True, customFileName="")
+        elif is_cpp_file:
+            settings = CppSettings(timeLimit=1000, memoryLimit=256, useSandbox=True, useFileIO=True, customFileName="")
+        else: # Default to CppSettings for unknown types
+            settings = CppSettings(timeLimit=1000, memoryLimit=256, useSandbox=True, useFileIO=True, customFileName="")
 
     return {
         "content": content,

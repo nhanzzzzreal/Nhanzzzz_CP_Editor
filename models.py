@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal, Union
 
 class Snippet(BaseModel):
     id: str
@@ -20,18 +20,28 @@ class GlobalConfig(BaseModel):
     snippets: List[Snippet] = []
     snippetShortcut: str = "Ctrl+Shift+P"
 
-class Settings(BaseModel):
-    compiler: str
-    optimization: str
-    warnings: bool
-    extraWarnings: bool
-    fastCompile: bool
-    outputFile: str
+# Common settings for both C++ and Python
+class CompileAndRunSettings(BaseModel):
     timeLimit: int
     memoryLimit: int
     useSandbox: bool
     useFileIO: Optional[bool] = True
     customFileName: Optional[str] = ""
+
+class CppSettings(CompileAndRunSettings):
+    compiler: str = "g++"
+    optimization: Literal['O0', 'O1', 'O2', 'O3'] = "O2"
+    warnings: bool = True
+    extraWarnings: bool = True
+    std: Literal['c++11', 'c++14', 'c++17', 'c++20', 'c++23'] = "c++14"
+
+class PythonSettings(CompileAndRunSettings):
+    compiler: str = "python"
+    # No specific Python-only settings for now
+
+# Union type for settings
+Settings = Union[CppSettings, PythonSettings]
+
 
 class CreateItemReq(BaseModel):
     parent_path: str
@@ -55,7 +65,7 @@ class TestCase(BaseModel):
 
 class FileDataSaveReq(BaseModel):
     path: str
-    settings: Optional[Settings] = None
+    settings: Optional[Settings] = None # Use the union type here
     testcases: Optional[List[TestCase]] = None
 
 class FileContentSaveReq(BaseModel):
@@ -66,5 +76,5 @@ class RunAllReq(BaseModel):
     path: str
     code: str
     testcases: List[TestCase]
-    settings: Settings
+    settings: Settings # Use the union type here
     globalConfig: Optional[GlobalConfig] = None

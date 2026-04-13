@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { AppSettings, FileNode, GlobalConfig, TestCase } from './types';
+import { AppSettings, FileNode, GlobalConfig, TestCase, CppSettings, PythonSettings } from './types'; // Import specific settings models
 
 //const API_BASE_URL = 'http://localhost:3690/api';
 const API_BASE_URL = 'http://localhost:3691/api';
@@ -36,7 +36,12 @@ const api = {
   getFileData: async (path: string): Promise<{ content: string; settings: AppSettings; testcases: TestCase[] }> => {
     const res = await fetch(`${API_BASE_URL}/files/data?path=${encodeURIComponent(path)}`);
     if (!res.ok) throw new Error(`File not found: ${path}`);
-    return res.json();
+    const data = await res.json();
+    return {
+      content: data.content,
+      settings: data.settings as AppSettings, // Cast to AppSettings
+      testcases: data.testcases,
+    };
   },
   saveFileContent: async ({ path, content }: { path: string; content: string }) => {
     const res = await fetch(`${API_BASE_URL}/files/content`, {
@@ -47,7 +52,7 @@ const api = {
     if (!res.ok) throw new Error('Failed to save file content');
     return res.json();
   },
-  saveFileData: async ({ path, settings, testcases }: { path: string; settings: AppSettings; testcases: TestCase[] }) => {
+  saveFileData: async ({ path, settings, testcases }: { path: string; settings: AppSettings; testcases: TestCase[] }) => { // Update settings type
     const res = await fetch(`${API_BASE_URL}/files/data`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -89,7 +94,7 @@ const api = {
     if (!res.ok) throw new Error('Failed to open file dialog');
     return res.json();
   },
-  runCode: (body: any) => fetch(`${API_BASE_URL}/run/stream`, {
+  runCode: (body: { path: string; code: string; testcases: TestCase[]; settings: AppSettings; globalConfig: GlobalConfig | null }) => fetch(`${API_BASE_URL}/run/stream`, { // Update settings type
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

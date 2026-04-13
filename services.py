@@ -4,14 +4,14 @@ import subprocess
 import uuid
 import shutil
 import time
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from models import Settings, GlobalConfig
+from models import CppSettings, PythonSettings, GlobalConfig, Settings
 
 # --- HẰNG SỐ ĐỂ ẨN CỬA SỔ TERMINAL ---
 CREATE_NO_WINDOW = 0x08000000
 
-def execute_code_stream(path: str, code: str, testcases: List[dict], settings: Settings, global_config: Optional[GlobalConfig] = None, workspace_dir: str = "workspace"):
+def execute_code_stream(path: str, code: str, testcases: List[dict], settings: Union[CppSettings, PythonSettings], global_config: Optional[GlobalConfig] = None, workspace_dir: str = "workspace"):
     python_cmd = global_config.pythonPath if global_config else "python"
     gpp_cmd = global_config.gppPath if global_config else "g++"
     is_python = "python" in settings.compiler.lower()
@@ -55,16 +55,18 @@ def execute_code_stream(path: str, code: str, testcases: List[dict], settings: S
                 f.write(code)
 
         if is_python:
-            cmd = [python_cmd, "-u", file_name]
+            python_settings: PythonSettings = settings # Type hint for clarity
+            cmd = [python_settings.compiler, "-u", file_name]
             yield json.dumps({"type": "compile_finish", "log": ""}) + "\n"
             
         else: # C++ Compilation
+            cpp_settings: CppSettings = settings # Type hint for clarity
             exe_file = os.path.join(run_workspace, f"{base_name}.exe" if os.name == 'nt' else base_name)
             
-            compile_cmd = [gpp_cmd, src_file]
-            if settings.optimization != "O0": compile_cmd.append(f"-{settings.optimization}")
-            if settings.warnings: compile_cmd.append("-Wall")
-            if settings.extraWarnings: compile_cmd.append("-Wextra")
+            compile_cmd = [cpp_settings.compiler, src_file, f"-std={cpp_settings.std}"]
+            if cpp_settings.optimization != "O0": compile_cmd.append(f"-{cpp_settings.optimization}")
+            if cpp_settings.warnings: compile_cmd.append("-Wall")
+            if cpp_settings.extraWarnings: compile_cmd.append("-Wextra")
             compile_cmd.extend(["-o", exe_file])
             
             # Vẫn dùng CREATE_NO_WINDOW để ẩn terminal khi biên dịch
