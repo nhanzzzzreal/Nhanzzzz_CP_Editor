@@ -77,9 +77,11 @@ def execute_code_stream(path: str, code: str, settings: Union[CppSettings, Pytho
             if cpp_settings.warnings: compile_cmd.append("-Wall")
             if cpp_settings.extraWarnings: compile_cmd.append("-Wextra")
             compile_cmd.extend(["-o", exe_file])
-            
+
+            yield json.dumps({"type": "log", "log": f"Compiler command: {' '.join(compile_cmd)}"}) + "\n"
+
             # Vẫn dùng CREATE_NO_WINDOW để ẩn terminal khi biên dịch
-            proc = subprocess.run(compile_cmd, capture_output=True, text=True, cwd=run_workspace, creationflags=CREATE_NO_WINDOW)
+            proc = subprocess.run(compile_cmd, capture_output=True, text=True, cwd=run_workspace)
             
             yield json.dumps({"type": "compile_finish", "log": proc.stderr}) + "\n"
 
@@ -97,6 +99,8 @@ def execute_code_stream(path: str, code: str, settings: Union[CppSettings, Pytho
         # 3. VÒNG LẶP CHẠY TỪNG TESTCASE QUA RUNNER.EXE
         all_results = []
         for tc in testcases:
+            tc_index = testcases.index(tc) + 1
+            yield json.dumps({"type": "log", "log": f"--- Running Testcase #{tc_index} (ID: {tc['id']}) ---"}) + "\n"
             result_to_yield = None
             try:
                 timeout_sec = settings.timeLimit / 1000.0
@@ -164,7 +168,7 @@ def execute_code_stream(path: str, code: str, settings: Union[CppSettings, Pytho
                 # Kiểm tra trạng thái do Runner đánh giá (TLE/RE)
                 if runner_status != "AC":
                     status = runner_status
-                    out_text = actual_stdout + "\n" + error_msg
+                    out_text = (actual_stdout + "\n" + error_msg).strip()
                     # Nếu runner báo TLE, thời gian trả về phải là time limit, không phải thời gian thực tế đã chạy
                     if status == "TLE":
                         exec_time = settings.timeLimit
@@ -175,8 +179,8 @@ def execute_code_stream(path: str, code: str, settings: Union[CppSettings, Pytho
                     else:
                         out_text = actual_stdout.strip()
 
-                    actual_output = out_text.strip()
-                    expected_answer = tc["answer"].strip()
+                    actual_output = out_text.strip().replace('\r\n', '\n')
+                    expected_answer = (tc.get("answer") or "").strip().replace('\r\n', '\n')
 
                     if not expected_answer:
                         status = "AC" 

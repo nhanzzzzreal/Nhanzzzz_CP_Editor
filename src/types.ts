@@ -8,8 +8,8 @@ export type TestStatus = 'pending' | 'running' | 'AC' | 'WA' | 'TLE' | 'MLE' | '
 
 export interface TestCase {
   id: string;
-  input: string;
-  answer: string;
+  input: string | null;
+  answer: string | null;
   output: string;
   status: TestStatus;
   isExpanded?: boolean;

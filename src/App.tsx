@@ -21,9 +21,9 @@ import { useCreateItemMutation, useDeleteItemMutation, useFileDataQuery, useFile
 // --- Component Imports ---
 import { SettingsModal } from './components/SettingsModal';
 import { TestCaseItem } from './components/TestCaseItem';
+import { Terminal } from './components/Terminal';
 import { SnippetManagerModal } from './components/SnippetManagerModal';
 import { SnippetMenu } from './components/SnippetMenu';
-import { Terminal } from './components/Terminal';
 import { GlobalSettingsModal } from './components/GlobalSettingsModal';
 import { useHotkeys } from 'react-hotkeys-hook';
 
@@ -31,6 +31,10 @@ import { useHotkeys } from 'react-hotkeys-hook';
 const API_BASE_URL = 'http://localhost:3691/api'; // Default FastAPI port
 
 export default function App() {
+  const formatLogMessage = useCallback((message: string): string => {
+    return `[${new Date().toLocaleTimeString([], { hour12: false })}] ${message}`;
+  }, []);
+
   // Zustand Store
   const {
     logs, addLog, clearLogs,
@@ -121,10 +125,10 @@ export default function App() {
     openFileDialogMutation.mutate(undefined, {
       onSuccess: (data) => {
       if (data.status === 'ok') {
-        const fileId = data.path;
-        const fileName = data.name;
-        openFile(fileId);
-        addLog(`Opened file: ${fileName}`);
+        const { path: fileId, name: fileName } = data;
+        openFile(fileId); // This will trigger fileDataQuery and subsequent loading
+        addLog(formatLogMessage(`Opened file: ${fileName}`));
+        // Refresh tree to ensure new file is visible if it was created/opened outside the tree
         refreshTree();
       }
       },
@@ -143,7 +147,7 @@ export default function App() {
     })
     .then(response => !response.ok && Promise.reject('Server responded with an error.'))
     .then(() => {
-      addLog(`File saved successfully.`);
+      addLog(formatLogMessage(`File saved successfully.`));
       removeUnsaved(activeFileId);
     })
     .catch(error => addLog(`Error saving file: ${error}`));
@@ -152,7 +156,7 @@ export default function App() {
   const handleOpenWorkspace = useCallback(async () => {
     openWorkspaceMutation.mutate(undefined, {
       onSuccess: (data) => {
-      if (data.status === 'ok') {
+      if (data.status === 'ok' && data.path) {
         addLog(`Workspace changed to: ${data.path}`);
         setOpenFileIds([]);
         setActiveFileId('');
@@ -220,10 +224,14 @@ export default function App() {
 
   // Debounced save for file data (settings, testcases)
   const debouncedSaveFileData = useDebouncedCallback(() => {
-    if (activeFileId && !activeFileId.startsWith('temp')) {
-      saveFileDataMutation.mutate({ path: activeFileId, settings, testcases });
+    if (activeFileId && !activeFileId.startsWith('temp') && !isLoadingDataRef.current) {
+      addLog(formatLogMessage(`[Auto-Save] Saving settings & testcases for ${activeFileId}...`));
+      saveFileDataMutation.mutate({ path: activeFileId, settings, testcases }, {
+        onSuccess: () => addLog(formatLogMessage(`[Auto-Save] Data for ${activeFileId} saved successfully.`)),
+        onError: (err: any) => addLog(formatLogMessage(`[Auto-Save] FAILED to save data for ${activeFileId}: ${err.message}`))
+      });
     }
-  }, 1500);
+  }, 2000); // Increased delay slightly
 
   useEffect(() => {
     if (fileData) { // Only save if data has been loaded
@@ -321,14 +329,17 @@ export default function App() {
                 
                 if (data.type === 'compile_finish') {
                   setRunStatus('running');
-                  if (data.log) addLog(`Compiler Log:\n${data.log}`);
+                  if (data.log) addLog(formatLogMessage(`Compiler Log:\n${data.log}`));
                 } else if (data.type === 'test_result') {
                   const res = data.result;
                   setTestcases(prev => prev.map(t => {
-                    if (t.id !== res.id) return t;
-                    const normalize = (s: string) => s.replace(/\r?\n|\r/g, "\n").trim();
-                    const isCorrect = !t.answer || normalize(res.output) === normalize(t.answer);
-                    const finalStatus = res.status === 'AC' && t.answer !== null && !isCorrect ? 'WA' : res.status; // Check t.answer for null
+                    if (t.id !== res.id) return t;                    
+                    const finalStatus = res.status; // Trust backend status
+
+                    if (finalStatus !== 'AC') {
+                      addLog(formatLogMessage(`> Single Testcase FAILED. Status: ${finalStatus}. Time: ${res.time}ms. Details: ${res.error_log || 'Output does not match expected answer.'}`));
+                    }
+
                     return { ...t, output: res.output, status: finalStatus, time: res.time };
                   }));
                   addLog(`Single testcase finished.`);
@@ -344,7 +355,7 @@ export default function App() {
         }
       },
       onError: (error: any) => {
-        addLog(`Error running testcase: ${error.message}`);
+        addLog(formatLogMessage(`Error running testcase: ${error.message}`));
         setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'RE', output: `Client/Network Error: ${error.message}` } : t));
         setRunStatus('idle'); // Set idle nếu có lỗi mạng
       }
@@ -353,12 +364,12 @@ export default function App() {
 
   const handleRun = async () => {
     if (isFileLoading) {
-      addLog('⏳ Vui lòng chờ testcases tải xong trước khi chạy...');
+      addLog(formatLogMessage('⏳ Vui lòng chờ testcases tải xong trước khi chạy...'));
       return;
     }
     const codeToRun = editorRef.current?.getValue();
     if (!activeFile || codeToRun === undefined) {
-      addLog('Lỗi: Không có file hoặc nội dung code để chạy.');
+      addLog(formatLogMessage('Lỗi: Không có file hoặc nội dung code để chạy.'));
       return;
     }
 
@@ -368,7 +379,7 @@ export default function App() {
     setCurrentTestIndex(0);
     const isPython = (settings as any).compiler.toLowerCase().includes('python'); // Check compiler from current settings
     setRunStatus(isPython ? 'running' : 'compiling');
-    addLog(`Starting execution... (Syncing data with server)`);
+    addLog(formatLogMessage(`Starting execution... (Syncing data with server)`));
 
     // 2. Call the run mutation. The backend will handle saving first, then running.
     // The payload includes everything the backend needs to establish the "source of truth".
@@ -406,7 +417,7 @@ export default function App() {
                 if (data.type === 'compile_finish') {
                   setRunStatus('running');
                   if (data.log) {
-                    addLog(`Compiler Log:\n${data.log}`);
+                    addLog(formatLogMessage(`Compiler Log:\n${data.log}`));
                     // If compile error, backend sends CE for all. UI should reflect this.
                     if (data.log.trim() !== '') {
                         setTestcases(prev => prev.map(tc => ({...tc, status: 'CE'})));
@@ -415,20 +426,22 @@ export default function App() {
                 } else if (data.type === 'test_result') {
                   const res = data.result;
                   setTestcases(prev => prev.map(tc => {
-                    if (tc.id === res.id) {
-                      // Trust the status from the backend, which is the source of truth for judging.
-                      return { ...tc, output: res.output, status: res.status, time: res.time };
+                    if (tc.id !== res.id) return tc;
+                    if (res.status !== 'AC') {
+                      const tcIndex = prev.findIndex(t => t.id === res.id);
+                      addLog(formatLogMessage(`> Testcase #${tcIndex + 1} FAILED. Status: ${res.status}. Time: ${res.time}ms. Details: ${res.error_log || 'Output does not match expected answer.'}`));
                     }
-                    return tc;
+                    return { ...tc, output: res.output, status: res.status, time: res.time };
                   }));
+
                   completedTests++;
                   setCurrentTestIndex(completedTests);
                 } else if (data.type === 'results_saved') {
-                  addLog('All results saved on server. State synchronized.');
+                  addLog(formatLogMessage('All results saved on server. State synchronized.'));
                   // This is still good for a final sync, ensuring UI matches the final DB state.
                   queryClient.invalidateQueries({ queryKey: ['fileData', data.path] });
                 } else if (data.type === 'log') {
-                  addLog(data.log);
+                  addLog(formatLogMessage(data.log));
                 } else if (data.type === 'run_aborted') {
                   // Handle the new error case from server.py
                   setRunStatus('idle');
@@ -439,7 +452,7 @@ export default function App() {
               }
             }
           }
-          addLog('Execution finished.');
+          addLog(formatLogMessage('Execution finished.'));
         } finally {
           setRunStatus('idle');
           // Fallback: Check for any testcases that didn't get a result and mark them as errored.
@@ -451,7 +464,7 @@ export default function App() {
         }
       },
       onError: (error: any) => {
-        addLog(`Error: ${error.message}`);
+        addLog(formatLogMessage(`Error: ${error.message}`));
         setRunStatus('idle');
         setTestcases(prev => prev.map(tc => 
           tc.status === 'running' || tc.status === 'pending' ? { ...tc, status: 'RE', output: `Client/Network Error: ${error.message}` } : tc
@@ -502,7 +515,7 @@ export default function App() {
 
     if (loadedTestcases.length > 0) {
       setTestcases(loadedTestcases);
-      addLog(`Loaded ${loadedTestcases.length} testcases from folder.`);
+      addLog(formatLogMessage(`Loaded ${loadedTestcases.length} testcases from folder.`));
     }
     e.target.value = '';
   };
@@ -529,7 +542,7 @@ export default function App() {
       else if (currentSelecting === 'ac') setAcFile(fileState);
       else if (currentSelecting === 'gen') setGenFile(fileState);
       
-      addLog(`Loaded ${file.name} as ${currentSelecting} code.`);
+      addLog(formatLogMessage(`Loaded ${file.name} as ${currentSelecting} code.`));
     };
     reader.readAsText(file);
     e.target.value = ''; 
@@ -540,7 +553,7 @@ export default function App() {
       addLog(`Error: Please select all 3 files for stress testing.`);
       return;
     }
-    addLog(`Starting stress test...`);
+    addLog(formatLogMessage(`Starting stress test...`));
     setIsStressing(true);
 
     try {
@@ -555,9 +568,9 @@ export default function App() {
         }),
       });
       const result = await response.json(); 
-      addLog(`Stress Test Result: ${result.message}`);
+      addLog(formatLogMessage(`Stress Test Result: ${result.message}`));
     } catch (error: any) {
-      addLog(`Stress test failed: ${error.message}`);
+      addLog(formatLogMessage(`Stress test failed: ${error.message}`));
     } finally {
       setIsStressing(false);
     }
@@ -613,11 +626,13 @@ export default function App() {
 
     // 2. Khi đang tải file mới (isFileLoading), reset testcases để tránh hiển thị dữ liệu cũ.
     if (isFileLoading) {
+      addLog(formatLogMessage(`Loading data for ${activeFileId}...`));
       setTestcases([]);
       return;
     }
 
     // 3. Khi đã tải xong (isFileLoading là false), cập nhật state từ fileData.
+    addLog(formatLogMessage(`Data for ${activeFileId} loaded. Populating UI.`));
     isLoadingDataRef.current = true; // Chặn auto-save ngay sau khi load
 
     setEditorContent(fileData?.content || '');
@@ -671,10 +686,14 @@ export default function App() {
   };
 
   const debouncedSaveContent = useDebouncedCallback((path: string, content: string) => {
-    if (!path || path.startsWith('temp')) return;
+    if (!path || path.startsWith('temp') || isLoadingDataRef.current) return;
+    addLog(formatLogMessage(`[Auto-Save] Saving content for ${path}...`));
     saveFileContentMutation.mutate({ path, content }, {
-      onSuccess: () => removeUnsaved(path),
-      onError: (err: any) => addLog(`Error saving content: ${err.message}`),
+      onSuccess: () => {
+        removeUnsaved(path);
+        addLog(formatLogMessage(`[Auto-Save] Content for ${path} saved successfully.`));
+      },
+      onError: (err: any) => addLog(`[Auto-Save] FAILED to save content for ${path}: ${err.message}`),
     });
   }, globalConfig?.autoSaveDelay || 1500);
 
@@ -711,7 +730,7 @@ export default function App() {
 
       openFile(fileId);
 
-      addLog(`Opened ${file.name} from drag-and-drop.`);
+      addLog(formatLogMessage(`Opened ${file.name} from drag-and-drop.`));
       e.dataTransfer.clearData();
     }
   }
@@ -735,8 +754,8 @@ export default function App() {
     }
 
     createItemMutation.mutate({ parent_path: parentPath, name: name, type: type }, {
-      onSuccess: () => addLog(`Đã tạo ${type}: ${name}`),
-      onError: (err: any) => addLog(`Lỗi khi tạo: ${err.message}`),
+      onSuccess: () => addLog(formatLogMessage(`Đã tạo ${type}: ${name}`)),
+      onError: (err: any) => addLog(formatLogMessage(`Lỗi khi tạo: ${err.message}`)),
     });
   };
 
@@ -746,7 +765,7 @@ export default function App() {
 
     renameItemMutation.mutate({ old_path: oldPath, new_name: finalNewName }, {
       onSuccess: (data) => {
-        addLog(`Đã đổi tên thành: ${finalNewName}`);
+        addLog(formatLogMessage(`Đã đổi tên thành: ${finalNewName}`));
         const newPath = data.new_path;
 
         const newOpenFileIds = openFileIds.map(id => id === oldPath ? newPath : id);
@@ -755,7 +774,7 @@ export default function App() {
           setActiveFileId(newPath);
         }
       },
-      onError: (err: any) => addLog(`Lỗi khi đổi tên: ${err.message}`),
+      onError: (err: any) => addLog(formatLogMessage(`Lỗi khi đổi tên: ${err.message}`)),
     });
   };
 
@@ -765,14 +784,14 @@ export default function App() {
 
     deleteItemMutation.mutate(contextMenu.node.id, {
       onSuccess: () => {
-        addLog(`Đã xóa: ${contextMenu.node!.name}`);
+        addLog(formatLogMessage(`Đã xóa: ${contextMenu.node!.name}`));
         const newOpenFileIds = openFileIds.filter(id => !id.startsWith(contextMenu.node!.id));
         setOpenFileIds(newOpenFileIds);
         if (activeFileId.startsWith(contextMenu.node!.id)) {
           setActiveFileId(newOpenFileIds.length > 0 ? newOpenFileIds[newOpenFileIds.length - 1] : '');
         }
       },
-      onError: (err: any) => addLog(`Lỗi khi xóa: ${err.message}`),
+      onError: (err: any) => addLog(formatLogMessage(`Lỗi khi xóa: ${err.message}`)),
     });
   };
   const renderVscodeItem = ({ item, depth, children, title, context, arrow }: {
@@ -1265,15 +1284,11 @@ export default function App() {
             onExpand={() => setTerminalOpen(true)}
             className="w-full" 
           >
-            <Terminal 
-              logs={logs} 
-              onClear={clearLogs}
-            />
+            <Terminal logs={logs} onClear={clearLogs} />
           </Panel>
         </PanelGroup>
       </div>
-
-      <SettingsModal 
+      <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
@@ -1290,52 +1305,52 @@ export default function App() {
         />
       )}
 
-      <SnippetManagerModal 
+      <SnippetManagerModal
         isOpen={isSnippetManagerOpen}
         onClose={() => setIsSnippetManagerOpen(false)}
         snippets={globalConfig?.snippets || []}
         onUpdate={(newSnippets) => saveGlobalConfigMutation.mutate({ ...globalConfig, snippets: newSnippets } as GlobalConfig)}
       />
 
-      <SnippetMenu 
+      <SnippetMenu
         isOpen={isSnippetMenuOpen}
         onClose={() => setIsSnippetMenuOpen(false)}
         snippets={globalConfig?.snippets || []}
         onSelect={insertSnippet}
       />
 
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        className="hidden" 
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
         onChange={onFileChange}
         accept=".cpp,.c,.py,.java,.txt"
       />
 
-      <input 
-        type="file" 
-        ref={folderInputRef} 
-        className="hidden" 
+      <input
+        type="file"
+        ref={folderInputRef}
+        className="hidden"
         onChange={onFolderChange}
         {...({ webkitdirectory: "", directory: "" } as any)}
       />
 
       {contextMenu.visible && contextMenu.node && (
-        <div 
+        <div
           className="fixed z-50 bg-[#252526] border border-[#3c3c3c] shadow-2xl rounded py-1.5 w-48 text-sm"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onContextMenu={(e) => e.preventDefault()}
         >
           {contextMenu.node.type === 'folder' && (
             <>
-              <button 
-                onClick={() => handleCreateItem('file', contextMenu.node?.id)} 
+              <button
+                onClick={() => handleCreateItem('file', contextMenu.node?.id)}
                 className="w-full text-left px-4 py-2 hover:bg-blue-600 text-gray-300 hover:text-white transition-colors flex items-center gap-2"
               >
                 <FilePlus size={14} /> File mới
               </button>
-              <button 
-                onClick={() => handleCreateItem('folder', contextMenu.node?.id)} 
+              <button
+                onClick={() => handleCreateItem('folder', contextMenu.node?.id)}
                 className="w-full text-left px-4 py-2 hover:bg-blue-600 text-gray-300 hover:text-white transition-colors flex items-center gap-2"
               >
                 <Folder size={14} /> Thư mục mới
@@ -1343,15 +1358,15 @@ export default function App() {
               <div className="h-px bg-[#3c3c3c] my-1" />
             </>
           )}
-          <button 
-            onClick={() => handleRenameNode(contextMenu.node!.id, contextMenu.node!.name)} 
+          <button
+            onClick={() => handleRenameNode(contextMenu.node!.id, contextMenu.node!.name)}
             className="w-full text-left px-4 py-2 hover:bg-[#333] text-gray-300 hover:text-white transition-colors"
           >
             Đổi tên (Rename)
           </button>
           <div className="h-px bg-[#3c3c3c] my-1" />
-          <button 
-            onClick={handleDeleteNode} 
+          <button
+            onClick={handleDeleteNode}
             className="w-full text-left px-4 py-2 hover:bg-red-600/20 text-red-400 hover:text-red-300 transition-colors"
           >
             Xóa (Delete)
@@ -1369,12 +1384,12 @@ const FileSelector = ({ label, file, onSelect }: { label: string, file: FileStat
         <span className="text-xs text-gray-500 ml-1">{label}</span>
         {file && <span className="text-[10px] text-green-500 font-mono">Loaded</span>}
       </div>
-      <button 
+      <button
         onClick={onSelect}
         className={cn(
           "w-full flex items-center gap-3 px-3 py-2 border rounded text-sm transition-all text-left overflow-hidden",
-          file 
-            ? "border-blue-500 bg-blue-500/10 text-blue-100" 
+          file
+            ? "border-blue-500 bg-blue-500/10 text-blue-100"
             : "border-[#3c3c3c] bg-[#1e1e1e] text-gray-400 hover:border-gray-500"
         )}
       >
@@ -1383,4 +1398,4 @@ const FileSelector = ({ label, file, onSelect }: { label: string, file: FileStat
       </button>
     </div>
   );
-}
+};

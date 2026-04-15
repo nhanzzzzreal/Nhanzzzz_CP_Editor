@@ -61,8 +61,8 @@ class RenameItemReq(BaseModel):
 
 class TestCase(BaseModel):
     id: str
-    input: str
-    answer: str
+    input: Optional[str] = None
+    answer: Optional[str] = None
     output: Optional[str] = ""
     status: Optional[str] = "pending"
     time: Optional[int] = -1

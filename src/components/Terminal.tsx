@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useMemo } from 'react';
-import { Terminal as TerminalIcon } from 'lucide-react';
+import React, { useEffect, useRef, useMemo, useState, useCallback, RefObject } from 'react';
+import { Terminal as TerminalIcon, ClipboardCopy, Trash2 } from 'lucide-react';
 import { Xterm } from 'xterm-react';
 import { ITerminalOptions, Terminal as XtermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
@@ -38,10 +38,12 @@ const terminalOptions: ITerminalOptions = {
 };
 
 export const Terminal = ({ logs, onClear }: { logs: string[], onClear: () => void }) => {
-  // Cập nhật Type cho termRef sử dụng XtermTerminal
-  const termRef = useRef<XtermTerminal | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const termRef: RefObject<XtermTerminal> = useRef<XtermTerminal>(null);
+  const containerRef: RefObject<HTMLDivElement> = useRef<HTMLDivElement>(null);
   const prevLogsLengthRef = useRef(0);
+  const [filter, setFilter] = useState('');
+
+  // Memoize fitAddon to prevent re-creation on every render
   
   const fitAddon = useMemo(() => new FitAddon(), []);
 
@@ -80,9 +82,8 @@ export const Terminal = ({ logs, onClear }: { logs: string[], onClear: () => voi
       }
       const newLogs = logs.slice(prevLogsLengthRef.current);
       newLogs.forEach(log => {
-        const timestamp = `[${new Date().toLocaleTimeString([], { hour12: false })}]`;
         const formattedLog = log.replace(/\r?\n/g, '\r\n');
-        term.writeln(`\x1b[34m${timestamp}\x1b[0m ${formattedLog}`);
+        term.writeln(formattedLog);
       });
     }
 
@@ -101,28 +102,31 @@ export const Terminal = ({ logs, onClear }: { logs: string[], onClear: () => voi
     }
   }, [logs.length]); // Added logs.length to dependency array to satisfy React rules if needed, otherwise [] is fine.
 
-  // Cập nhật Type cho tham số
+  const copyToClipboard = useCallback(() => {
+    navigator.clipboard.writeText(logs.join('\n'));
+  }, [logs]);
+
   const handleTerminalInit = (terminal: XtermTerminal) => {
     termRef.current = terminal;
+    fitAddon.activate(terminal); // Activate fit addon here
+    terminal.writeln('\x1b[3m\x1b[90mNo output yet...\x1b[0m'); // Initial message
   };
 
   return (
-    <div className="h-full bg-[#1e1e1e] flex flex-col overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-1.5 bg-[#252526] border-b border-[#333]">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 text-[11px] text-gray-400 uppercase font-bold tracking-wider">
+    <div className="h-full flex flex-col bg-[#1a1a1a]">
+      <header className="flex items-center justify-between px-3 py-1.5 border-b border-[#333] shrink-0">
+        <div className="flex items-center gap-2">
             <TerminalIcon size={14} />
-            Terminal
-          </div>
-          <button
-            onClick={onClear}
-            className="text-[11px] text-gray-500 hover:text-gray-300 transition-colors uppercase font-bold tracking-wider"
-          >
-            Clear
-          </button>
+            <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Terminal</span>
         </div>
-      </div>
+        <div className="flex items-center gap-2">
+          <input type="text" placeholder="Filter logs..." value={filter} onChange={(e) => setFilter(e.target.value)} className="bg-[#252526] border border-[#3c3c3c] rounded px-2 py-0.5 text-xs w-48 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          <button onClick={copyToClipboard} className="p-1.5 rounded hover:bg-[#333] text-gray-400" title="Copy All Logs"><ClipboardCopy size={14} /></button>
+          <button onClick={onClear} className="p-1.5 rounded hover:bg-[#333] text-red-500/80" title="Clear Terminal"><Trash2 size={14} /></button>
+        </div>
+      </header>
       <div ref={containerRef} className="flex-1 p-3 pt-1 overflow-hidden">
+        {/* Xterm component will render the logs */}
         <Xterm
           className="h-full"
           onInit={handleTerminalInit}
