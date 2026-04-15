@@ -6,37 +6,41 @@ class Snippet(BaseModel):
     name: str
     content: str
 
+class Shortcuts(BaseModel):
+    snippetShortcut: str
+    # Thêm các phím tắt khác vào đây trong tương lai
+
 class GlobalConfig(BaseModel):
     lastWorkspace: str
-    gppPath: str = "g++"
-    pythonPath: str = "python"
-    autoSaveDelay: int = 5000
-    editorFontSize: int = 14
-    editorFontFamily: str = "'JetBrains Mono', 'Fira Code', monospace"
-    appVersion: str = "v1.0.0"
-    openFileIds: List[str] = []
-    activeFileId: str = ""
-    treeState: Optional[Dict[str, bool]] = {}
-    snippets: List[Snippet] = []
-    snippetShortcut: str = "Ctrl+Shift+P"
+    gppPath: str
+    pythonPath: str
+    autoSaveDelay: int
+    editorFontSize: int
+    editorFontFamily: str
+    appVersion: str
+    openFileIds: List[str]
+    activeFileId: str
+    treeState: Optional[Dict[str, bool]]
+    snippets: List[Snippet]
+    shortcuts: Shortcuts
 
 # Common settings for both C++ and Python
 class CompileAndRunSettings(BaseModel):
     timeLimit: int
     memoryLimit: int
     useSandbox: bool
-    useFileIO: Optional[bool] = True
-    customFileName: Optional[str] = ""
+    useFileIO: Optional[bool]
+    customFileName: Optional[str]
 
 class CppSettings(CompileAndRunSettings):
-    compiler: str = "g++"
-    optimization: Literal['O0', 'O1', 'O2', 'O3'] = "O2"
-    warnings: bool = True
-    extraWarnings: bool = True
-    std: Literal['c++11', 'c++14', 'c++17', 'c++20', 'c++23'] = "c++14"
+    compiler: str
+    optimization: Literal['O0', 'O1', 'O2', 'O3']
+    warnings: bool
+    extraWarnings: bool
+    std: Literal['c++11', 'c++14', 'c++17', 'c++20', 'c++23']
 
 class PythonSettings(CompileAndRunSettings):
-    compiler: str = "python"
+    compiler: str
     # No specific Python-only settings for now
 
 # Union type for settings

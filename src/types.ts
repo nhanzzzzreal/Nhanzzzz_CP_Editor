@@ -77,7 +77,12 @@ export interface GlobalConfig {
   appVersion: string; // For app info
   openFileIds: string[];
   activeFileId: string;
-  treeState?: { [id: string]: boolean };
+  treeState?: { [id: string]: boolean }; // Make optional for robustness
   snippets: Snippet[];
+  shortcuts: Shortcuts;
+}
+
+export interface Shortcuts {
   snippetShortcut: string;
+  // Thêm các phím tắt khác vào đây trong tương lai
 }

@@ -22,5 +22,7 @@
             "content": "// nhanzzzz - THPT Xuan Loc\n#include <bits/stdc++.h>\n#define int long long\n#define endl \"\\n\"\n#define task \"main\"\nusing namespace std;\n//\n\n\nsigned main(){\n    ios::sync_with_stdio(0); cin.tie(0); cout.tie(0);\n    if(fopen(task\".inp\",\"r\")){\n        freopen(task\".inp\",\"r\",stdin);\n        freopen(task\".out\",\"w\",stdout);\n    }\n    //\n    \n\n}"
         }
     ],
-    "snippetShortcut": "Ctrl+Shift+P"
+    "shortcuts": {
+        "snippetShortcut": "Ctrl+Shift+P"
+    }
 }

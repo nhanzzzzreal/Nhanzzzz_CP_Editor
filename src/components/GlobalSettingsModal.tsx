@@ -31,9 +31,16 @@ export const GlobalSettingsModal = ({ isOpen, onClose, globalSettings, onSave }:
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type } = e.target;
-    setConfig(prev => ({
-      ...prev,
-      [name]: type === 'number' ? Number(value) : value,
+    setConfig(prevConfig => ({
+      ...prevConfig,
+      // Xử lý trường hợp lồng nhau cho 'shortcuts'
+      ...(name.startsWith('shortcuts.')
+        ? {
+            shortcuts: {
+              ...prevConfig.shortcuts,
+              [name.split('.')[1]]: value,
+            },
+          } : { [name]: type === 'number' ? Number(value) : value }),
     }));
   };
 
@@ -108,8 +115,8 @@ export const GlobalSettingsModal = ({ isOpen, onClose, globalSettings, onSave }:
           <InputGroup label="Snippet Menu Shortcut" description="Phím tắt để mở menu snippet (ví dụ: Ctrl+Shift+P).">
             <input
               type="text"
-              name="snippetShortcut"
-              value={config.snippetShortcut}
+              name="shortcuts.snippetShortcut" // Sử dụng tên lồng nhau
+              value={config.shortcuts.snippetShortcut}
               onChange={handleChange}
               className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm text-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             />

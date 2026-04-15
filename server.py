@@ -16,6 +16,7 @@ import pystray
 from pystray import MenuItem as item
 import webbrowser
 
+from defaultconfig import DEFAULT_GLOBAL_CONFIG, DEFAULT_CPP_SETTINGS, DEFAULT_PYTHON_SETTINGS
 # --- CẤU HÌNH THƯ MỤC ---
 # Xác định đường dẫn gốc dựa trên môi trường chạy (script vs .exe)
 if getattr(sys, 'frozen', False):
@@ -79,29 +80,27 @@ app.add_middleware(
 # --- API QUẢN LÝ FILE ---
 @app.get("/api/app-config")
 def get_app_config():
-    """Trả về cấu hình toàn cục từ file JSON"""
+    """Trả về cấu hình toàn cục, hợp nhất từ file đã lưu và giá trị mặc định."""
+    # Bắt đầu với một bản sao của cấu hình mặc định
+    config_data = DEFAULT_GLOBAL_CONFIG.copy()
+
     if os.path.exists(GLOBAL_CONFIG_FILE):
         try:
             with open(GLOBAL_CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                saved_config = json.load(f)
+                # Hợp nhất cấu hình đã lưu vào cấu hình mặc định
+                # Các giá trị trong saved_config sẽ ghi đè lên giá trị mặc định,
+                # đặc biệt xử lý trường 'shortcuts' là một dictionary lồng nhau
+                config_data.update(saved_config) 
+                if "shortcuts" in saved_config and isinstance(saved_config["shortcuts"], dict):
+                    config_data["shortcuts"].update(saved_config["shortcuts"])
         except Exception:
+            # Nếu file bị lỗi, chỉ sử dụng cấu hình mặc định đã được chuẩn bị
             pass
     
-    # Nếu chưa có file, trả về giá trị mặc định khớp với Frontend
-    return {
-        "lastWorkspace": WORKSPACE_DIR,
-        "gppPath": "g++",
-        "pythonPath": "python",
-        "autoSaveDelay": 1500,
-        "editorFontSize": 14,
-        "editorFontFamily": "'JetBrains Mono', 'Fira Code', monospace",
-        "appVersion": "v1.0.0",
-        "openFileIds": [],
-        "activeFileId": "",
-        "treeState": {},
-        "snippets": [],
-        "snippetShortcut": "Ctrl+Shift+P"
-    }
+    # Luôn trả về thư mục làm việc hiện tại đang được server sử dụng
+    config_data["lastWorkspace"] = WORKSPACE_DIR
+    return config_data
 
 @app.post("/api/app-config")
 def save_app_config(config: GlobalConfig):
@@ -297,24 +296,31 @@ def get_file_data(path: str):
     is_python_file = path.endswith(".py")
     is_cpp_file = path.endswith(".cpp") or path.endswith(".c")
 
+    # Xác định cài đặt mặc định dựa trên loại file
+    default_settings_dict = {}
+    if is_python_file:
+        default_settings_dict = DEFAULT_PYTHON_SETTINGS.copy()
+    else: # Mặc định là C++ cho các loại file không xác định hoặc C/C++
+        default_settings_dict = DEFAULT_CPP_SETTINGS.copy()
+
     if os.path.exists(meta_path):
-        with open(meta_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            settings = data.get("settings")
-            if settings:
-                if is_python_file:
-                    settings = PythonSettings(**settings)
-                elif is_cpp_file:
-                    settings = CppSettings(**settings)
-            testcases = data.get("testcases", [])
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                saved_settings = data.get("settings")
+                if saved_settings:
+                    # Hợp nhất cài đặt đã lưu vào cài đặt mặc định
+                    default_settings_dict.update(saved_settings)
+                testcases = data.get("testcases", [])
+        except Exception:
+            # Nếu file meta bị lỗi, chỉ sử dụng cài đặt mặc định
+            pass
+
+    # Tạo đối tượng Pydantic từ dữ liệu đã hợp nhất
+    if is_python_file:
+        settings = PythonSettings(**default_settings_dict)
     else:
-        # Provide default settings if no meta file exists
-        if is_python_file:
-            settings = PythonSettings(timeLimit=1000, memoryLimit=256, useSandbox=True, useFileIO=True, customFileName="")
-        elif is_cpp_file:
-            settings = CppSettings(timeLimit=1000, memoryLimit=256, useSandbox=True, useFileIO=True, customFileName="")
-        else: # Default to CppSettings for unknown types
-            settings = CppSettings(timeLimit=1000, memoryLimit=256, useSandbox=True, useFileIO=True, customFileName="")
+        settings = CppSettings(**default_settings_dict)
 
     return {
         "content": content,

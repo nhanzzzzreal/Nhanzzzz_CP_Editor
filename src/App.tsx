@@ -192,14 +192,14 @@ export default function App() {
 
   // Mở menu snippet (phím tắt động từ config)
   const snippetShortcut = useMemo(() => {
-    if (!globalConfig?.snippetShortcut) return 'mod+shift+p';
+    if (!globalConfig?.shortcuts?.snippetShortcut) return 'mod+shift+p';
     // Chuyển đổi "Ctrl+Shift+P" thành "mod+shift+p" để hỗ trợ đa nền tảng
-    return globalConfig.snippetShortcut
+    return globalConfig.shortcuts.snippetShortcut
       .toLowerCase()
       .split('+')
       .map(part => part === 'ctrl' || part === 'cmd' || part === 'meta' ? 'mod' : part)
       .join('+');
-  }, [globalConfig?.snippetShortcut]);
+  }, [globalConfig?.shortcuts?.snippetShortcut]);
 
   useHotkeys(snippetShortcut, () => {
     setIsSnippetMenuOpen(true);
