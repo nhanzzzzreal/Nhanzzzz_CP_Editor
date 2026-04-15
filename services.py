@@ -5,13 +5,22 @@ import uuid
 import shutil
 import time
 from typing import List, Optional, Union
-
+import database
 from models import CppSettings, PythonSettings, GlobalConfig, Settings
 
 # --- HẰNG SỐ ĐỂ ẨN CỬA SỔ TERMINAL ---
 CREATE_NO_WINDOW = 0x08000000
 
-def execute_code_stream(path: str, code: str, testcases: List[dict], settings: Union[CppSettings, PythonSettings], global_config: Optional[GlobalConfig] = None, workspace_dir: str = "workspace"):
+def execute_code_stream(path: str, code: str, settings: Union[CppSettings, PythonSettings], global_config: Optional[GlobalConfig] = None, workspace_dir: str = "workspace"):
+    # --- NEW WORKFLOW: Get testcases directly from the database ---
+    # The 'testcases' argument is removed. We trust the data that was just saved by the server endpoint.
+    _, testcases = database.get_problem_data(path)
+    if not testcases:
+        # This case should be rare since the server just saved them, but it's good practice to check.
+        yield json.dumps({"type": "log", "log": "Warning: No testcases found in database to run."}) + "\n"
+        return
+    # --- END NEW WORKFLOW ---
+
     python_cmd = global_config.pythonPath if global_config else "python"
     gpp_cmd = global_config.gppPath if global_config else "g++"
     is_python = "python" in settings.compiler.lower()
@@ -195,31 +204,34 @@ def execute_code_stream(path: str, code: str, testcases: List[dict], settings: U
         # --- LOGIC ĐỂ LƯU KẾT QUẢ VÀO FILE .CPE ---
         # Sau khi chạy xong tất cả testcase, ta chủ động ghi kết quả vào file .cpe
         # để đảm bảo dữ liệu được lưu trữ bền bỉ ngay lập tức.
-        if not is_temp_file and all_results:
-            data_file_path = path + ".cpe"
+        if not is_temp_file and all_results and path:
             try:
-                # Chỉ cập nhật file đã tồn tại. Nếu chưa có, client sẽ tạo ra sau.
-                if os.path.exists(data_file_path):
-                    with open(data_file_path, 'r', encoding='utf-8') as f:
-                        file_data = json.load(f)
+                # Lấy cài đặt hiện tại của file (chỉ cần settings, testcases sẽ được ghi đè)
+                # Lấy toàn bộ dữ liệu testcase hiện có từ DB để giữ lại input/answer gốc
+                current_settings, existing_testcases_from_db = database.get_problem_data(path)
+                
+                # Tạo một map từ ID của các kết quả chạy để dễ dàng cập nhật
+                executed_results_map = {res["id"]: res for res in all_results}
+                
+                # Tạo danh sách testcases cuối cùng để lưu vào DB
+                final_testcases_to_save = []
+                for db_tc in existing_testcases_from_db:
+                    tc_id = db_tc["id"]
+                    if tc_id in executed_results_map:
+                        # Nếu testcase này đã được chạy, cập nhật output, status, time
+                        executed_result = executed_results_map[tc_id]
+                        final_testcases_to_save.append({
+                            **db_tc, # Giữ nguyên input, answer và các trường khác từ DB
+                            "output": executed_result.get("output", ""),
+                            "status": executed_result.get("status", "pending"),
+                            "time": executed_result.get("time", -1)
+                        })
+                    else:
+                        final_testcases_to_save.append(db_tc) # Giữ nguyên testcase nếu không được chạy
 
-                    if 'testcases' in file_data and isinstance(file_data['testcases'], list):
-                        results_map = {res['id']: res for res in all_results}
-                        was_updated = False
-                        for i, tc_from_file in enumerate(file_data['testcases']):
-                            tc_id = tc_from_file.get('id')
-                            if tc_id in results_map:
-                                new_result = results_map[tc_id]
-                                file_data['testcases'][i]['output'] = new_result.get('output', '')
-                                file_data['testcases'][i]['status'] = new_result.get('status', 'pending')
-                                file_data['testcases'][i]['time'] = new_result.get('time', -1)
-                                was_updated = True
-                        
-                        if was_updated:
-                            with open(data_file_path, 'w', encoding='utf-8') as f:
-                                json.dump(file_data, f, indent=2)
-                            # Gửi tín hiệu báo client rằng file đã được lưu thành công
-                            yield json.dumps({"type": "results_saved", "path": path}) + "\n"
+                # Lưu dữ liệu đã cập nhật vào DB
+                database.save_problem_data(path, current_settings, final_testcases_to_save)
+                yield json.dumps({"type": "results_saved", "path": path}) + "\n"
             except Exception as e:
                 # Gửi log lỗi về client nếu không lưu được file
                 yield json.dumps({"type": "log", "log": f"Server Error: Could not save results to .cpe file: {str(e)}"}) + "\n"

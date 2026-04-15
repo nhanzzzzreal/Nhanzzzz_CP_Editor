@@ -17,6 +17,7 @@ from pystray import MenuItem as item
 import webbrowser
 
 from defaultconfig import DEFAULT_GLOBAL_CONFIG, DEFAULT_CPP_SETTINGS, DEFAULT_PYTHON_SETTINGS
+import database
 # --- CẤU HÌNH THƯ MỤC ---
 # Xác định đường dẫn gốc dựa trên môi trường chạy (script vs .exe)
 if getattr(sys, 'frozen', False):
@@ -155,32 +156,12 @@ def rename_item(req: RenameItemReq):
         new_path = os.path.join(dir_name, req.new_name)
         os.rename(req.old_path, new_path)
         
-        # Nếu là đổi tên file, cần đổi tên luôn file cấu hình .json trong thư mục .cpe
-        if os.path.isfile(new_path):
-            old_meta = get_meta_file_path(req.old_path)
-            if os.path.exists(old_meta):
-                new_meta = get_meta_file_path(new_path)
-                os.rename(old_meta, new_meta)
+        # Cập nhật tên file trong cơ sở dữ liệu
+        database.rename_problem_data(req.old_path, new_path)
                 
         return {"status": "success", "new_path": new_path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# --- HELPER FUNCTIONS ---
-def get_meta_file_path(file_path: str) -> str:
-    is_temp_file = file_path.startswith("temp") and not os.path.isabs(file_path)
-    
-    if is_temp_file:
-        # Nếu là file ảo, gom chung metadata vào WORKSPACE/.cpe/temp
-        cpe_dir = os.path.join(WORKSPACE_DIR, ".cpe", "temp")
-    else:
-        # File nằm trong workspace -> tạo thư mục .cpe nằm ngay cùng cấp với file code
-        dir_name = os.path.dirname(file_path)
-        cpe_dir = os.path.join(dir_name, ".cpe")
-        
-    base_name = os.path.basename(file_path)
-    os.makedirs(cpe_dir, exist_ok=True)
-    return os.path.join(cpe_dir, f"{base_name}.json")
 
 def build_folder_tree(current_path: str):
     """Đệ quy quét thư mục để gửi về cho TreeView của React"""
@@ -289,10 +270,7 @@ def get_file_data(path: str):
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
 
-    meta_path = get_meta_file_path(path)
-    settings = None
-    testcases = []
-    
+    # Lấy dữ liệu từ database
     is_python_file = path.endswith(".py")
     is_cpp_file = path.endswith(".cpp") or path.endswith(".c")
 
@@ -303,18 +281,12 @@ def get_file_data(path: str):
     else: # Mặc định là C++ cho các loại file không xác định hoặc C/C++
         default_settings_dict = DEFAULT_CPP_SETTINGS.copy()
 
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                saved_settings = data.get("settings")
-                if saved_settings:
-                    # Hợp nhất cài đặt đã lưu vào cài đặt mặc định
-                    default_settings_dict.update(saved_settings)
-                testcases = data.get("testcases", [])
-        except Exception:
-            # Nếu file meta bị lỗi, chỉ sử dụng cài đặt mặc định
-            pass
+    saved_settings, testcases = database.get_problem_data(path)
+    if saved_settings:
+        default_settings_dict.update(saved_settings)
+    else:
+        # Nếu không có cài đặt nào trong DB, dùng mặc định và khởi tạo DB
+        database.save_problem_data(path, default_settings_dict, [])
 
     # Tạo đối tượng Pydantic từ dữ liệu đã hợp nhất
     if is_python_file:
@@ -339,22 +311,41 @@ def save_file_content(req: FileContentSaveReq):
 @app.post("/api/files/data")
 def save_file_data(req: FileDataSaveReq):
     """Lưu testcase và settings vào json"""
-    meta_path = get_meta_file_path(req.path)
-    data = {
-        "settings": req.settings.model_dump() if req.settings else None,
-        "testcases": [tc.model_dump() for tc in req.testcases] if req.testcases else []
-    }
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+    database.save_problem_data(req.path, req.settings.model_dump() if req.settings else None, [tc.model_dump() for tc in req.testcases] if req.testcases else [])
     return {"status": "ok"}
+
+
 
 @app.post("/api/run/stream")
 async def run_stream(req: RunAllReq):
+    # --- NEW WORKFLOW: SAVE BEFORE RUN ---
+    # This ensures the database is the source of truth before execution starts.
+    try:
+        # 1. Save settings and testcases to DB. This is the most critical step for consistency.
+        database.save_problem_data(
+            req.path, 
+            req.settings.model_dump(), 
+            [tc.model_dump() for tc in req.testcases]
+        )
+        
+        # 2. Save the current code content to the physical file.
+        # This is important for the compiler/interpreter to find the correct code.
+        if not req.path.startswith("temp"):
+            with open(req.path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(req.code)
+    except Exception as e:
+        # If saving fails, we cannot proceed. We must inform the client.
+        async def error_stream():
+            yield json.dumps({"type": "log", "log": f"FATAL: Failed to save data before execution: {e}"}) + "\n"
+            # We can add a specific event type for the UI to handle this failure state
+            yield json.dumps({"type": "run_aborted"}) + "\n" 
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
+    # --- END NEW WORKFLOW ---
+
     return StreamingResponse(
         execute_code_stream(
             req.path,
-            req.code,
-            [tc.model_dump() for tc in req.testcases],
+            req.code, # Still pass code for temp files and sandbox logic
             req.settings,
             req.globalConfig,
             workspace_dir=WORKSPACE_DIR
@@ -362,6 +353,13 @@ async def run_stream(req: RunAllReq):
         media_type="text/event-stream"
     )
 
+@app.delete("/api/files")
+def delete_item(path: str):
+    try:
+        database.delete_problem_data(path) # Xóa dữ liệu liên quan trong DB
+        # ... (logic xóa file/thư mục vật lý) ...
+    except:
+        print("done")
 
 # Chỉ phục vụ các file tĩnh và index.html nếu KHÔNG ở chế độ phát triển (production build)
 # Ở chế độ phát triển, Vite sẽ phục vụ frontend

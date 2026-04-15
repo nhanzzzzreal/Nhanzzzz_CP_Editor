@@ -328,7 +328,7 @@ export default function App() {
                     if (t.id !== res.id) return t;
                     const normalize = (s: string) => s.replace(/\r?\n|\r/g, "\n").trim();
                     const isCorrect = !t.answer || normalize(res.output) === normalize(t.answer);
-                    const finalStatus = res.status === 'AC' && !isCorrect ? 'WA' : res.status;
+                    const finalStatus = res.status === 'AC' && t.answer !== null && !isCorrect ? 'WA' : res.status; // Check t.answer for null
                     return { ...t, output: res.output, status: finalStatus, time: res.time };
                   }));
                   addLog(`Single testcase finished.`);
@@ -362,28 +362,33 @@ export default function App() {
       return;
     }
 
+    // 1. Reset UI state immediately to 'pending' to stop flickering and show user action is in progress.
+    // The UI now shows a clean state, waiting for results.
+    setTestcases(prev => prev.map(tc => ({ ...tc, status: 'pending', output: '', time: -1 })));
+    setCurrentTestIndex(0);
     const isPython = (settings as any).compiler.toLowerCase().includes('python'); // Check compiler from current settings
     setRunStatus(isPython ? 'running' : 'compiling');
-    addLog(`Starting execution...`);
-    setTestcases(prev => prev.map(tc => ({ ...tc, status: 'running', output: '', time: undefined })));
-    setCurrentTestIndex(0);
+    addLog(`Starting execution... (Syncing data with server)`);
 
+    // 2. Call the run mutation. The backend will handle saving first, then running.
+    // The payload includes everything the backend needs to establish the "source of truth".
     runCodeMutation.mutate({
           path: activeFileId,
           code: codeToRun,
-          testcases: testcases.map(({ id, input, answer }) => ({ id, input, answer })),
+          testcases: testcases, // Send the full current state of testcases to be saved
           settings: settings,
           globalConfig: globalConfig,
     }, {
       onSuccess: async (response) => {
-        // THÊM TRY...FINALLY Ở ĐÂY
+        // The streaming logic here updates the UI as results come in.
+        // The key is that the backend is now running on guaranteed-to-be-saved data.
         try {
           if (!response.body) return;
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           
           let buffer = ''; 
-          let completedTests = 0; // FIX 1: Tạo biến đếm cục bộ để tránh lỗi closure
+          let completedTests = 0;
 
           while (true) {
             const { done, value } = await reader.read();
@@ -397,34 +402,37 @@ export default function App() {
               if (!line.trim()) continue;
               try {
                 const data = JSON.parse(line);
-                
+
                 if (data.type === 'compile_finish') {
                   setRunStatus('running');
-                  if (data.log) addLog(`Compiler Log:\n${data.log}`);
+                  if (data.log) {
+                    addLog(`Compiler Log:\n${data.log}`);
+                    // If compile error, backend sends CE for all. UI should reflect this.
+                    if (data.log.trim() !== '') {
+                        setTestcases(prev => prev.map(tc => ({...tc, status: 'CE'})));
+                    }
+                  }
                 } else if (data.type === 'test_result') {
                   const res = data.result;
                   setTestcases(prev => prev.map(tc => {
                     if (tc.id === res.id) {
-                      const cleanOutput = res.output.trim();
-                      const cleanAnswer = tc.answer.trim(); 
-
-                      const normalize = (s: string) => s.replace(/\r?\n|\r/g, "\n").trim();
-                      const isCorrect = !cleanAnswer || normalize(cleanOutput) === normalize(cleanAnswer);
-                      
-                      const finalStatus = res.status === 'AC' && !isCorrect ? 'WA' : res.status;
-
-                      return { ...tc, output: res.output, status: finalStatus, time: res.time };
+                      // Trust the status from the backend, which is the source of truth for judging.
+                      return { ...tc, output: res.output, status: res.status, time: res.time };
                     }
                     return tc;
                   }));
-                  // FIX 2: Tăng biến đếm và set state
                   completedTests++;
                   setCurrentTestIndex(completedTests);
                 } else if (data.type === 'results_saved') {
                   addLog('All results saved on server. State synchronized.');
+                  // This is still good for a final sync, ensuring UI matches the final DB state.
                   queryClient.invalidateQueries({ queryKey: ['fileData', data.path] });
                 } else if (data.type === 'log') {
                   addLog(data.log);
+                } else if (data.type === 'run_aborted') {
+                  // Handle the new error case from server.py
+                  setRunStatus('idle');
+                  setTestcases(prev => prev.map(tc => ({...tc, status: 'RE', output: 'Execution aborted due to server-side save error.'})));
                 }
               } catch (e) {
                 console.error("JSON Parse error:", e, line);
@@ -433,14 +441,10 @@ export default function App() {
           }
           addLog('Execution finished.');
         } finally {
-          // FIX 3: Luôn đưa trạng thái về idle khi luồng stream kết thúc hoàn toàn
           setRunStatus('idle');
-          // Sau khi luồng kết thúc, rà soát lại các testcase.
-          // Nếu có testcase nào vẫn còn ở trạng thái 'running', điều đó có nghĩa là
-          // kết quả của nó đã không được gửi về từ backend.
-          // Ta sẽ đánh dấu nó là RE để người dùng biết đã có lỗi xảy ra.
+          // Fallback: Check for any testcases that didn't get a result and mark them as errored.
           setTestcases(prev => prev.map(tc => 
-            tc.status === 'running' 
+            tc.status === 'running' || tc.status === 'pending'
               ? { ...tc, status: 'RE', output: (tc.output || '') + "\nError: The execution result was not received from the backend." } 
               : tc
           ));
@@ -448,10 +452,9 @@ export default function App() {
       },
       onError: (error: any) => {
         addLog(`Error: ${error.message}`);
-        setRunStatus('idle'); // Set idle nếu có lỗi mạng
-        // Nếu có lỗi mạng ngay từ đầu, tất cả các testcase đang chạy sẽ được đánh dấu là RE
+        setRunStatus('idle');
         setTestcases(prev => prev.map(tc => 
-          tc.status === 'running' ? { ...tc, status: 'RE', output: `Client/Network Error: ${error.message}` } : tc
+          tc.status === 'running' || tc.status === 'pending' ? { ...tc, status: 'RE', output: `Client/Network Error: ${error.message}` } : tc
         ));
       }
     });
@@ -490,7 +493,7 @@ export default function App() {
       .map(([name, data]) => ({
         id: crypto.randomUUID(),
         input: data.inp || '',
-        answer: data.out || '',
+        answer: data.out || null, // Allow null for answer
         output: '',
         status: 'pending',
         isExpanded: false,
@@ -604,7 +607,7 @@ export default function App() {
     // 1. Xử lý trường hợp không có file nào được chọn: reset về trạng thái mặc định.
     if (!activeFileId) {
       setEditorContent('');
-      setTestcases([{ id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 }]);
+      setTestcases([{ id: crypto.randomUUID(), input: '', answer: null, output: '', status: 'pending', isExpanded: true, time: -1 }]); // Allow null for answer
       return;
     }
 
@@ -647,7 +650,7 @@ export default function App() {
       })));
     } else {
       // Nếu không có testcase nào, reset về trạng thái mặc định.
-      setTestcases([{ id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 }]);
+      setTestcases([{ id: crypto.randomUUID(), input: '', answer: null, output: '', status: 'pending', isExpanded: true, time: -1 }]); // Allow null for answer
     }
 
     // Tắt cờ khóa sau một khoảng trễ để cho phép auto-save hoạt động lại.
