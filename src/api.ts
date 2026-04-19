@@ -13,7 +13,7 @@ export const queryKeys = {
 
 // --- API Fetcher Functions ---
 
-const api = {
+export const api = {
   getGlobalConfig: async (): Promise<GlobalConfig> => {
     const res = await fetch(`${API_BASE_URL}/app-config`);
     if (!res.ok) throw new Error('Failed to fetch global config');
@@ -99,6 +99,15 @@ const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   }),
+  getDiff: async (expected: string, actual: string) => {
+    const res = await fetch(`${API_BASE_URL}/diff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected, actual }),
+    });
+    if (!res.ok) throw new Error('Failed to fetch diff');
+    return res.json();
+  },
 };
 
 // --- TanStack Query Hooks ---

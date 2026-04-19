@@ -4,6 +4,7 @@ import subprocess
 import uuid
 import shutil
 import time
+import sys
 from typing import List, Optional, Union
 import database
 from models import CppSettings, PythonSettings, GlobalConfig, Settings
@@ -11,7 +12,16 @@ from models import CppSettings, PythonSettings, GlobalConfig, Settings
 # --- HẰNG SỐ ĐỂ ẨN CỬA SỔ TERMINAL ---
 CREATE_NO_WINDOW = 0x08000000
 
-def execute_code_stream(path: str, code: str, settings: Union[CppSettings, PythonSettings], global_config: Optional[GlobalConfig] = None, workspace_dir: str = "workspace"):
+class DotDict(dict):
+    def __getattr__(self, item):
+        if item in self:
+            return self[item]
+        raise AttributeError(item)
+
+def execute_code_stream(path: str, code: str, settings_dict: dict, global_config_dict: Optional[dict] = None, workspace_dir: str = "workspace"):
+    settings = DotDict(settings_dict)
+    global_config = DotDict(global_config_dict) if global_config_dict else None
+
     # --- NEW WORKFLOW: Get testcases directly from the database ---
     # The 'testcases' argument is removed. We trust the data that was just saved by the server endpoint.
     _, testcases = database.get_problem_data(path)
@@ -56,11 +66,11 @@ def execute_code_stream(path: str, code: str, settings: Union[CppSettings, Pytho
     try:
         # 2. GHI CODE VÀO FILE THẬT
         src_file = os.path.join(run_workspace, file_name)
-        with open(src_file, "w", encoding="utf-8", newline="\n") as f:
+        with open(src_file, "w", encoding="utf-8", newline="") as f:
             f.write(code)
 
         if not is_temp_file and os.path.exists(path) and src_file != path:
-            with open(path, "w", encoding="utf-8", newline="\n") as f:
+            with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(code)
 
         if is_python:
@@ -98,6 +108,36 @@ def execute_code_stream(path: str, code: str, settings: Union[CppSettings, Pytho
 
         # 3. VÒNG LẶP CHẠY TỪNG TESTCASE QUA RUNNER.EXE
         all_results = []
+        
+        # --- XỬ LÝ CUSTOM CHECKER ---
+        checker_name = settings.get("checker", "Ignore Trailing Space (Default)")
+        is_default_checker = checker_name.startswith("Ignore Trailing Space") or checker_name == ""
+        checker_exe = None
+        
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+            
+        if not is_default_checker:
+            checker_basename = os.path.splitext(checker_name)[0]
+            checker_file_cpp = os.path.join(base_dir, "checkers", f"{checker_basename}.cpp")
+            checker_file_exe = os.path.join(base_dir, "checkers", f"{checker_basename}.exe")
+
+            if os.path.exists(checker_file_exe):
+                # Ưu tiên dùng file .exe đã được dịch sẵn trong thư mục checkers
+                checker_exe = checker_file_exe
+            elif os.path.exists(checker_file_cpp):
+                checker_exe = os.path.join(workspace_dir, ".cpe", "temp", f"{checker_basename}.exe")
+                if not os.path.exists(checker_exe) or os.path.getmtime(checker_file_cpp) > os.path.getmtime(checker_exe):
+                    yield json.dumps({"type": "log", "log": f"Compiling custom checker {checker_basename}.cpp..."}) + "\n"
+                    gpp_path = global_config.gppPath if global_config else "g++"
+                    subprocess.run([gpp_path, checker_file_cpp, "-o", checker_exe, "-O2", "-std=c++14"], capture_output=True)
+            else:
+                yield json.dumps({"type": "log", "log": f"Warning: Checker {checker_basename} not found. Falling back to default."}) + "\n"
+                is_default_checker = True
+                
+        yield json.dumps({"type": "log", "log": f"Using Checker: {checker_exe if not is_default_checker else 'Ignore Trailing Space (Default)'}"}) + "\n"
+
         for tc in testcases:
             tc_index = testcases.index(tc) + 1
             yield json.dumps({"type": "log", "log": f"--- Running Testcase #{tc_index} (ID: {tc['id']}) ---"}) + "\n"
@@ -107,7 +147,7 @@ def execute_code_stream(path: str, code: str, settings: Union[CppSettings, Pytho
                 memory_limit_mb = getattr(settings, 'memoryLimit', 256)
 
                 if settings.useFileIO:
-                    with open(inp_file, "w", encoding="utf-8", newline="\n") as f: 
+                    with open(inp_file, "w", encoding="utf-8", newline="") as f: 
                         f.write(tc["input"])
                     if os.path.exists(out_file): 
                         os.remove(out_file)
@@ -180,14 +220,43 @@ def execute_code_stream(path: str, code: str, settings: Union[CppSettings, Pytho
                         out_text = actual_stdout.strip()
 
                     actual_output = out_text.strip().replace('\r\n', '\n')
-                    expected_answer = (tc.get("answer") or "").strip().replace('\r\n', '\n')
+                    expected_answer = str(tc.get("answer") or "").strip().replace('\r\n', '\n')
 
-                    if not expected_answer:
-                        status = "AC" 
-                    elif actual_output == expected_answer:
-                        status = "AC"
+                    if is_default_checker:
+                        if not expected_answer:
+                            status = "AC" 
+                        elif actual_output == expected_answer:
+                            status = "AC"
+                        else:
+                            status = "WA"
                     else:
-                        status = "WA"
+                        # Chấm bằng Custom Checker
+                        ans_file = os.path.join(run_workspace, f"{io_base_name}.ans")
+                        with open(ans_file, "w", encoding="utf-8", newline="") as f:
+                            f.write(expected_answer)
+                            
+                        if not settings.useFileIO:
+                            with open(out_file, "w", encoding="utf-8", newline="") as f:
+                                f.write(actual_output)
+                            with open(inp_file, "w", encoding="utf-8", newline="") as f:
+                                f.write(tc.get("input", ""))
+                                
+                        if checker_exe and os.path.exists(checker_exe):
+                            chk_proc = subprocess.run(
+                                [checker_exe, inp_file, out_file, ans_file], 
+                                capture_output=True, 
+                                text=True,
+                                creationflags=CREATE_NO_WINDOW
+                            )
+                            if chk_proc.returncode == 0:
+                                status = "AC"
+                            else:
+                                status = "WA"
+                                chk_msg = chk_proc.stderr.strip() or chk_proc.stdout.strip()
+                                if chk_msg: error_msg = f"Checker: {chk_msg}"
+                        else:
+                            status = "WA"
+                            error_msg = "Checker executable not found or failed to compile."
                     
                 result_to_yield = {
                     "id": tc["id"], "output": out_text, "status": status, "error_log": error_msg, "time": int(exec_time)

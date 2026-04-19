@@ -1,7 +1,20 @@
-import React, { Dispatch, SetStateAction } from 'react';
-import { Settings as SettingsIcon, X } from 'lucide-react';
+import React, { Dispatch, SetStateAction, useState, useEffect } from 'react';
+import { Settings as SettingsIcon, X, Info } from 'lucide-react';
 import { AppSettings, CppSettings, PythonSettings } from '../types'; // Import all relevant types
 import { cn } from '../lib/utils';
+
+const CHECKER_DESCRIPTIONS: Record<string, string> = {
+  'fcmp.cpp': 'Compare files strictly the same',
+  'hcmp.cpp': 'Compare huge integers (>64bit)',
+  'lcmp.cpp': 'Compare line by line',
+  'ncmp.cpp': 'Compare two 64-bit integers',
+  'nyesno.cpp': 'Compare multiple YES/NO, TRUE/FALSE, 0/1',
+  'yesno.cpp': 'Compare YES/NO, TRUE/FALSE, 0/1',
+  'wcmp.cpp': 'Compare sequence of tokens/words',
+  'rcmp4.cpp': 'Compare real numbers up to 4 decimal places',
+  'rcmp6.cpp': 'Compare real numbers up to 6 decimal places',
+  'rcmp9.cpp': 'Compare real numbers up to 9 decimal places',
+};
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -12,6 +25,20 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal = ({ isOpen, onClose, settings, setSettings, isPythonFile }: SettingsModalProps) => {
+  const [availableCheckers, setAvailableCheckers] = useState<string[]>(['Ignore Trailing Space (Default)']);
+  const [showCheckerInfo, setShowCheckerInfo] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetch('http://localhost:3691/api/checkers')
+        .then(res => res.json())
+        .then(data => {
+          if (data.checkers) setAvailableCheckers(data.checkers);
+        })
+        .catch(() => {});
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   // Cast settings to the specific type for easier access
@@ -50,6 +77,40 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, isPython
                 name="compiler" // Add name attribute
                 className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors"
               />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-[10px] text-gray-500 uppercase font-bold tracking-wider">Checker / Grader</label>
+                <button 
+                  onClick={() => setShowCheckerInfo(!showCheckerInfo)}
+                  className="text-gray-500 hover:text-blue-400 transition-colors"
+                  title="Checker Info"
+                >
+                  <Info size={14} />
+                </button>
+              </div>
+              {showCheckerInfo && (
+                <div className="mb-2 p-2.5 bg-[#1e1e1e] border border-[#3c3c3c] rounded text-xs text-gray-300 leading-relaxed">
+                  You can add more custom checkers written with <code>testlib.h</code> by placing them in the <code>checkers</code> folder, or download standard ones from{' '}
+                  <a href="https://github.com/MikeMirzayanov/testlib/tree/master/checkers" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
+                    MikeMirzayanov/testlib
+                  </a>.
+                </div>
+              )}
+              <select
+                value={(currentSettings as any).checker || 'Ignore Trailing Space (Default)'}
+                onChange={handleCommonChange}
+                name="checker"
+                className="w-full bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors appearance-none"
+              >
+                {availableCheckers.map(c => {
+                  const baseName = c.replace(' (Default)', '').trim();
+                  const desc = CHECKER_DESCRIPTIONS[baseName];
+                  const label = desc ? `${c} - ${desc}` : c;
+                  return <option key={c} value={c}>{label}</option>;
+                })}
+              </select>
             </div>
 
             {/* C++ Specific Settings */}

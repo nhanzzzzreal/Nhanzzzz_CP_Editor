@@ -23,6 +23,7 @@ export interface CompileAndRunSettings {
   useSandbox: boolean;
   useFileIO: boolean;
   customFileName: string;
+  checker?: string;
 }
 
 export interface CppSettings extends CompileAndRunSettings {

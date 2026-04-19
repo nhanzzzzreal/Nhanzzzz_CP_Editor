@@ -259,6 +259,33 @@ def get_tree():
     # Lấy danh sách con của workspace trực tiếp (không cần hiển thị root 'workspace')
     return tree.get("children", [])
 
+@app.post("/api/diff")
+async def get_diff(request: Request):
+    import difflib
+    data = await request.json()
+    expected = data.get("expected", "")
+    actual = data.get("actual", "")
+    expected_lines = expected.splitlines()
+    actual_lines = actual.splitlines()
+    matcher = difflib.SequenceMatcher(None, expected_lines, actual_lines)
+    return {
+        "opcodes": matcher.get_opcodes(),
+        "expected_lines": expected_lines,
+        "actual_lines": actual_lines
+    }
+
+@app.get("/api/checkers")
+def get_checkers():
+    checkers_dir = os.path.join(BASE_DIR, "checkers")
+    os.makedirs(checkers_dir, exist_ok=True)
+    checkers_set = set()
+    for f in os.listdir(checkers_dir):
+        if f.endswith(".cpp") or f.endswith(".exe"):
+            # Luôn hiển thị dưới dạng .cpp để tương thích với config đã lưu
+            checkers_set.add(f"{os.path.splitext(f)[0]}.cpp")
+            
+    return {"checkers": ["Ignore Trailing Space (Default)"] + sorted(list(checkers_set))}
+
 @app.get("/api/files/data")
 def get_file_data(path: str):
     """Trả về Nội dung code + Cài đặt + Testcases"""
@@ -293,10 +320,14 @@ def get_file_data(path: str):
         settings = PythonSettings(**default_settings_dict)
     else:
         settings = CppSettings(**default_settings_dict)
+        
+    settings_dict = settings.model_dump()
+    if "checker" in default_settings_dict:
+        settings_dict["checker"] = default_settings_dict["checker"]
 
     return {
         "content": content,
-        "settings": settings,
+        "settings": settings_dict,
         "testcases": testcases
     }
 
@@ -304,14 +335,18 @@ def get_file_data(path: str):
 def save_file_content(req: FileContentSaveReq):
     """Lưu code người dùng đang gõ"""
     if not req.path.startswith("temp"): # Bỏ qua việc ghi file nếu là file drag/drop ảo
-        with open(req.path, "w", encoding="utf-8") as f:
+        with open(req.path, "w", encoding="utf-8", newline="") as f:
             f.write(req.content)
     return {"status": "ok"}
 
 @app.post("/api/files/data")
-def save_file_data(req: FileDataSaveReq):
+async def save_file_data(request: Request):
     """Lưu testcase và settings vào json"""
-    database.save_problem_data(req.path, req.settings.model_dump() if req.settings else None, [tc.model_dump() for tc in req.testcases] if req.testcases else [])
+    req = await request.json()
+    path = req.get("path")
+    settings_dict = req.get("settings")
+    testcases = req.get("testcases", [])
+    database.save_problem_data(path, settings_dict, testcases)
     return {"status": "ok"}
 
 
@@ -331,7 +366,7 @@ async def run_stream(req: RunAllReq):
         # 2. Save the current code content to the physical file.
         # This is important for the compiler/interpreter to find the correct code.
         if not req.path.startswith("temp"):
-            with open(req.path, "w", encoding="utf-8", newline="\n") as f:
+            with open(req.path, "w", encoding="utf-8", newline="") as f:
                 f.write(req.code)
     except Exception as e:
         # If saving fails, we cannot proceed. We must inform the client.
@@ -342,12 +377,15 @@ async def run_stream(req: RunAllReq):
         return StreamingResponse(error_stream(), media_type="text/event-stream")
     # --- END NEW WORKFLOW ---
 
+    settings_dict = req.settings.model_dump()
+    global_config_dict = req.globalConfig.model_dump() if req.globalConfig else None
+
     return StreamingResponse(
         execute_code_stream(
             req.path,
-            req.code, # Still pass code for temp files and sandbox logic
-            req.settings,
-            req.globalConfig,
+            req.code, 
+            settings_dict,
+            global_config_dict,
             workspace_dir=WORKSPACE_DIR
         ),
         media_type="text/event-stream"

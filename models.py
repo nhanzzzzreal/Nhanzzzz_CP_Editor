@@ -31,6 +31,7 @@ class CompileAndRunSettings(BaseModel):
     useSandbox: bool
     useFileIO: Optional[bool]
     customFileName: Optional[str]
+    checker: Optional[str] = "diff"
 
 class CppSettings(CompileAndRunSettings):
     compiler: str
@@ -75,6 +76,10 @@ class FileDataSaveReq(BaseModel):
 class FileContentSaveReq(BaseModel):
     path: str
     content: str
+
+class DiffReq(BaseModel):
+    expected: str
+    actual: str
 
 class RunAllReq(BaseModel):
     path: str

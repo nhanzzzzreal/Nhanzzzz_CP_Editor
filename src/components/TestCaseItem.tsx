@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, ChevronDown, ChevronUp, Trash2, CheckCircle2, XCircle, Clock, AlertTriangle } from 'lucide-react';
+import { Play, ChevronDown, ChevronUp, Trash2, CheckCircle2, XCircle, Clock, AlertTriangle, GitCompare, Maximize2 } from 'lucide-react';
 import { TestCase, TestStatus } from '../types';
 
 function getStatusColor(status: TestStatus) {
@@ -31,18 +31,23 @@ export const TestCaseItem = React.memo(({
   index,
   onUpdate,
   onRemove,
-  onToggle,
   onRun,
-  runStatus
+  runStatus,
+  onOpenDiff,
+  isDiffSupported,
+  onOpenView
 }: {
   tc: TestCase,
   index: number,
   onUpdate: (id: string, field: keyof TestCase, value: string) => void,
   onRemove: (id: string) => void,
-  onToggle: (id: string) => void,
   onRun: (id: string) => void,
-  runStatus: 'idle' | 'compiling' | 'running'
+  runStatus: 'idle' | 'compiling' | 'running',
+  onOpenDiff: (expected: string, actual: string) => void,
+  isDiffSupported: boolean,
+  onOpenView: (tc: TestCase) => void
 }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   // State cục bộ cho các input để tránh re-render toàn bộ danh sách mỗi khi gõ
   const [localInput, setLocalInput] = useState(tc.input);
   const [localAnswer, setLocalAnswer] = useState(tc.answer);
@@ -68,10 +73,10 @@ export const TestCaseItem = React.memo(({
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => onToggle(tc.id)}
+            onClick={() => setIsExpanded(!isExpanded)}
             className="p-1 hover:bg-[#333] rounded transition-colors text-gray-400"
           >
-            {tc.isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
           <span className="text-xs font-bold text-gray-500">#{index + 1}</span>
           <StatusBadge status={tc.status} />
@@ -82,6 +87,22 @@ export const TestCaseItem = React.memo(({
           )}
         </div>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={() => onOpenView(tc)}
+          className="p-1.5 rounded hover:bg-[#333] text-gray-500 hover:text-purple-400 transition-colors"
+          title="View Full Testcase"
+        >
+          <Maximize2 size={14} />
+        </button>
+          {isDiffSupported && tc.status !== 'pending' && tc.status !== 'running' && (
+            <button
+              onClick={() => onOpenDiff(tc.answer || '', tc.output || '')}
+              className="p-1.5 rounded hover:bg-[#333] text-gray-500 hover:text-blue-400 transition-colors"
+              title="View Diff"
+            >
+              <GitCompare size={14} />
+            </button>
+          )}
           <button
             onClick={() => onRun(tc.id)}
             disabled={runStatus !== 'idle'}
@@ -100,10 +121,19 @@ export const TestCaseItem = React.memo(({
         </div>
       </div>
 
-      {tc.isExpanded && (
+      {isExpanded && (
         <div className="space-y-3 animate-in fade-in duration-200 mt-2 border-t border-[#333] pt-3">
           <div>
-            <label className="block text-[10px] text-gray-500 mb-1 uppercase tracking-wider">Input</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[10px] text-gray-500 uppercase tracking-wider">Input</label>
+              <button
+                onClick={() => onOpenView(tc)}
+                className="flex items-center gap-1 text-[10px] font-bold text-purple-400 hover:text-purple-300 transition-colors bg-purple-400/10 hover:bg-purple-400/20 px-2 py-0.5 rounded border border-purple-400/20"
+                title="View Full Testcase"
+              >
+                <Maximize2 size={10} /> View
+              </button>
+            </div>
             <textarea
               value={localInput}
               onChange={(e) => setLocalInput(e.target.value)}
@@ -125,7 +155,18 @@ export const TestCaseItem = React.memo(({
             />
           </div>
           <div>
-            <label className="block text-[10px] text-gray-500 mb-1 uppercase tracking-wider">Actual Output</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[10px] text-gray-500 uppercase tracking-wider">Actual Output</label>
+              {isDiffSupported && tc.status !== 'pending' && tc.status !== 'running' && (
+                <button
+                  onClick={() => onOpenDiff(tc.answer || '', tc.output || '')}
+                  className="flex items-center gap-1 text-[10px] font-bold text-blue-400 hover:text-blue-300 transition-colors bg-blue-400/10 hover:bg-blue-400/20 px-2 py-0.5 rounded border border-blue-400/20"
+                  title="View Diff"
+                >
+                  <GitCompare size={10} /> View Diff
+                </button>
+              )}
+            </div>
             <div className="w-full h-24 bg-[#1e1e1e] border border-[#3c3c3c] rounded p-2 font-mono text-xs overflow-y-auto whitespace-pre-wrap text-gray-300">
               {tc.output || <span className="text-gray-700 italic">No output</span>}
             </div>

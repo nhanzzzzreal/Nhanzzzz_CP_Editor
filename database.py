@@ -52,6 +52,7 @@ def init_folder_db(db_path: str):
                 use_sandbox BOOLEAN NOT NULL,
                 use_file_io BOOLEAN NOT NULL,
                 custom_file_name TEXT,
+                checker TEXT DEFAULT 'Ignore Trailing Space (Default)',
                 FOREIGN KEY (problem_file_name) REFERENCES problems(file_name) ON DELETE CASCADE
             )""")
 
@@ -68,6 +69,11 @@ def init_folder_db(db_path: str):
                 FOREIGN KEY (problem_file_name) REFERENCES problems(file_name) ON DELETE CASCADE
             )""")
         conn.commit()
+        
+        try:
+            conn.execute("ALTER TABLE settings ADD COLUMN checker TEXT DEFAULT 'Ignore Trailing Space (Default)'")
+        except:
+            pass
         return conn
     except Exception as e:
         logger.error(f"Không thể khởi tạo Database tại {db_path}: {e}")
@@ -91,12 +97,22 @@ def get_problem_data(code_file_path: str):
         
         # 1. Lấy settings
         settings_dict = None
-        cursor.execute("""
-            SELECT compiler, optimization, warnings, extra_warnings, std,
-                   time_limit, memory_limit, use_sandbox, use_file_io, custom_file_name
-            FROM settings WHERE problem_file_name = ?
-        """, (file_name,))
-        settings_row = cursor.fetchone()
+        has_checker = True
+        try:
+            cursor.execute("""
+                SELECT compiler, optimization, warnings, extra_warnings, std,
+                       time_limit, memory_limit, use_sandbox, use_file_io, custom_file_name, checker
+                FROM settings WHERE problem_file_name = ?
+            """, (file_name,))
+            settings_row = cursor.fetchone()
+        except sqlite3.OperationalError:
+            cursor.execute("""
+                SELECT compiler, optimization, warnings, extra_warnings, std,
+                       time_limit, memory_limit, use_sandbox, use_file_io, custom_file_name
+                FROM settings WHERE problem_file_name = ?
+            """, (file_name,))
+            settings_row = cursor.fetchone()
+            has_checker = False
         
         if settings_row:
             settings_dict = {
@@ -109,7 +125,8 @@ def get_problem_data(code_file_path: str):
                 "memoryLimit": settings_row[6],
                 "useSandbox": bool(settings_row[7]),
                 "useFileIO": bool(settings_row[8]),
-                "customFileName": settings_row[9]
+                "customFileName": settings_row[9],
+                "checker": settings_row[10] if has_checker else "Ignore Trailing Space (Default)"
             }
 
         # 2. Lấy testcases
@@ -175,15 +192,34 @@ def save_problem_data(code_file_path: str, settings_dict: dict, testcases_list: 
                 "memory_limit": settings_dict.get("memoryLimit"),
                 "use_sandbox": settings_dict.get("useSandbox"),
                 "use_file_io": settings_dict.get("useFileIO"),
-                "custom_file_name": settings_dict.get("customFileName")
+                "custom_file_name": settings_dict.get("customFileName"),
+                "checker": settings_dict.get("checker", "Ignore Trailing Space (Default)")
             }
             
-            cursor.execute("""
-                INSERT OR REPLACE INTO settings (
-                    problem_file_name, compiler, optimization, warnings, extra_warnings, std,
-                    time_limit, memory_limit, use_sandbox, use_file_io, custom_file_name
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, tuple(settings_values.values()))
+            try:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO settings (
+                        problem_file_name, compiler, optimization, warnings, extra_warnings, std,
+                        time_limit, memory_limit, use_sandbox, use_file_io, custom_file_name, checker
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, tuple(settings_values.values()))
+            except sqlite3.OperationalError:
+                try:
+                    cursor.execute("ALTER TABLE settings ADD COLUMN checker TEXT DEFAULT 'Ignore Trailing Space (Default)'")
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO settings (
+                            problem_file_name, compiler, optimization, warnings, extra_warnings, std,
+                            time_limit, memory_limit, use_sandbox, use_file_io, custom_file_name, checker
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, tuple(settings_values.values()))
+                except:
+                    settings_values.pop("checker", None)
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO settings (
+                            problem_file_name, compiler, optimization, warnings, extra_warnings, std,
+                            time_limit, memory_limit, use_sandbox, use_file_io, custom_file_name
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, tuple(settings_values.values()))
 
         # 3. Xóa testcases cũ và thêm testcases mới
         cursor.execute("DELETE FROM testcases WHERE problem_file_name = ?", (file_name,))

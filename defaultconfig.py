@@ -7,7 +7,7 @@ DEFAULT_GLOBAL_CONFIG = {
     "lastWorkspace": "", # This will be dynamically set by server.py
     "gppPath": "g++",
     "pythonPath": "python",
-    "autoSaveDelay": 1500,
+    "autoSaveDelay": 10000,
     "editorFontSize": 14,
     "editorFontFamily": "'JetBrains Mono', 'Fira Code', monospace",
     "appVersion": "v1.0.0",
@@ -29,6 +29,7 @@ DEFAULT_CPP_SETTINGS = {
     "useSandbox": True,
     "useFileIO": True,
     "customFileName": "",
+    "checker": "lcmp.cpp (Default)"
 }
 
 DEFAULT_PYTHON_SETTINGS = {
@@ -38,4 +39,5 @@ DEFAULT_PYTHON_SETTINGS = {
     "useSandbox": True,
     "useFileIO": True,
     "customFileName": "",
+    "checker": "lcmp.cpp (Default)"
 }

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
-import { Play, Terminal as TerminalIcon, FlaskConical, X, Upload, GripVertical, GripHorizontal, Plus, FolderOpen, Trash2, Settings as SettingsIcon, File, Folder, Loader2, FilePlus, FolderTree, Scissors, Zap } from 'lucide-react';
+import { Play, Terminal as TerminalIcon, FlaskConical, X, Upload, GripVertical, GripHorizontal, Plus, FolderOpen, Trash2, Settings as SettingsIcon, File, Folder, Loader2, FilePlus, FolderTree, Scissors, Zap, GitCompare } from 'lucide-react';
 import {
   Tree,
   UncontrolledTreeEnvironment,
@@ -26,6 +26,8 @@ import { SnippetManagerModal } from './components/SnippetManagerModal';
 import { SnippetMenu } from './components/SnippetMenu';
 import { GlobalSettingsModal } from './components/GlobalSettingsModal';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { DiffViewerModal } from './components/DiffViewerModal';
+import { TestCaseViewerModal } from './components/TestCaseViewerModal';
 
 // --- Constants ---
 const API_BASE_URL = 'http://localhost:3691/api'; // Default FastAPI port
@@ -60,6 +62,14 @@ export default function App() {
   const [editorContent, setEditorContent] = useState<string>('');
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   
+  const [isDiffOpen, setIsDiffOpen] = useState(false);
+  const [diffExpected, setDiffExpected] = useState('');
+  const [diffActual, setDiffActual] = useState('');
+  
+  const [isViewTcOpen, setIsViewTcOpen] = useState(false);
+  const [viewTcData, setViewTcData] = useState<TestCase | null>(null);
+  const [isDataDirty, setIsDataDirty] = useState(false);
+  
   // Refs
   const editorRef = useRef<any>(null); 
   const [settings, setSettings] = useState<AppSettings>(
@@ -86,11 +96,6 @@ export default function App() {
     { id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 }
   ]);
 
-  const toggleTestCase = (id: string) => {
-    setTestcases(prev => prev.map(tc => 
-      tc.id === id ? { ...tc, isExpanded: !tc.isExpanded } : tc
-    ));
-  };
   const terminalPanelRef = useRef<ImperativePanelHandle>(null);
   const treePanelRef = useRef<ImperativePanelHandle>(null);
   
@@ -139,19 +144,27 @@ export default function App() {
   }, [openFileDialogMutation, openFile, addLog, refreshTree]);
 
   const saveActiveFile = useCallback(() => {
-    if (!activeFileId) return;
-    fetch(`${API_BASE_URL}/files/content`, {
-      method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: activeFileId, content: editorRef.current?.getValue() }),
-    })
-    .then(response => !response.ok && Promise.reject('Server responded with an error.'))
-    .then(() => {
-      addLog(formatLogMessage(`File saved successfully.`));
+    if (!activeFileId || activeFileId.startsWith('temp')) return;
+    let saved = false;
+    
+    if (unsavedFileIds.has(activeFileId)) {
+      saveFileContentMutation.mutate({ path: activeFileId, content: editorRef.current?.getValue() || '' });
       removeUnsaved(activeFileId);
-    })
-    .catch(error => addLog(`Error saving file: ${error}`));
-  }, [activeFileId, addLog, removeUnsaved]);
+      saved = true;
+    }
+    
+    if (isDataDirty) {
+      saveFileDataMutation.mutate({ path: activeFileId, settings, testcases });
+      setIsDataDirty(false);
+      saved = true;
+    }
+    
+    if (saved) {
+      addLog(formatLogMessage(`File saved successfully.`));
+    } else {
+      addLog(formatLogMessage(`No changes to save.`));
+    }
+  }, [activeFileId, unsavedFileIds, isDataDirty, settings, testcases, addLog, removeUnsaved, saveFileContentMutation, saveFileDataMutation]);
 
   const handleOpenWorkspace = useCallback(async () => {
     openWorkspaceMutation.mutate(undefined, {
@@ -180,6 +193,8 @@ export default function App() {
     preventDefault: true,
     enableOnFormElements: true,
   };
+  
+  const isDiffSupported = true; // Luôn cho phép xem diff viewer bất kể dùng checker nào
 
   // Lưu file (Ctrl+S)
   useHotkeys('mod+s', () => {
@@ -222,22 +237,32 @@ export default function App() {
   };
   const activeFile = findFileById(activeFileId, fileTree);
 
-  // Debounced save for file data (settings, testcases)
-  const debouncedSaveFileData = useDebouncedCallback(() => {
-    if (activeFileId && !activeFileId.startsWith('temp') && !isLoadingDataRef.current) {
-      addLog(formatLogMessage(`[Auto-Save] Saving settings & testcases for ${activeFileId}...`));
-      saveFileDataMutation.mutate({ path: activeFileId, settings, testcases }, {
-        onSuccess: () => addLog(formatLogMessage(`[Auto-Save] Data for ${activeFileId} saved successfully.`)),
-        onError: (err: any) => addLog(formatLogMessage(`[Auto-Save] FAILED to save data for ${activeFileId}: ${err.message}`))
-      });
-    }
-  }, 2000); // Increased delay slightly
+  // --- NEW ARCHITECTURE: PERIODIC SYNC TO USB (RAM-first approach) ---
+  // Sử dụng ref để đảm bảo setInterval luôn đọc được state mới nhất mà không bị reset timer khi gõ phím
+  const latestStateRef = useRef({ activeFileId, unsavedFileIds, isDataDirty, settings, testcases });
+  useEffect(() => {
+    latestStateRef.current = { activeFileId, unsavedFileIds, isDataDirty, settings, testcases };
+  }, [activeFileId, unsavedFileIds, isDataDirty, settings, testcases]);
 
   useEffect(() => {
-    if (fileData) { // Only save if data has been loaded
-      debouncedSaveFileData();
-    }
-  }, [settings, testcases, debouncedSaveFileData]);
+    const delay = globalConfig?.autoSaveDelay || 10000; // Default: 10s
+    if (delay <= 0) return;
+
+    const timer = setInterval(() => {
+      const state = latestStateRef.current;
+      if (state.activeFileId && !state.activeFileId.startsWith('temp')) {
+        if (state.unsavedFileIds.has(state.activeFileId)) {
+          saveFileContentMutation.mutate({ path: state.activeFileId, content: editorRef.current?.getValue() || '' });
+          removeUnsaved(state.activeFileId);
+        }
+        if (state.isDataDirty) {
+          saveFileDataMutation.mutate({ path: state.activeFileId, settings: state.settings, testcases: state.testcases });
+          setIsDataDirty(false);
+        }
+      }
+    }, delay);
+    return () => clearInterval(timer);
+  }, [globalConfig?.autoSaveDelay, saveFileContentMutation, saveFileDataMutation, removeUnsaved]);
 
   // Hydrate store with initial file state from global config
   const isHydrated = useRef(false);
@@ -383,6 +408,7 @@ export default function App() {
 
     // 2. Call the run mutation. The backend will handle saving first, then running.
     // The payload includes everything the backend needs to establish the "source of truth".
+    setIsDataDirty(false); // Clear dirty flag since backend takes care of saving
     runCodeMutation.mutate({
           path: activeFileId,
           code: codeToRun,
@@ -509,7 +535,6 @@ export default function App() {
         answer: data.out || null, // Allow null for answer
         output: '',
         status: 'pending',
-        isExpanded: false,
         time: -1
       }));
 
@@ -620,7 +645,7 @@ export default function App() {
     // 1. Xử lý trường hợp không có file nào được chọn: reset về trạng thái mặc định.
     if (!activeFileId) {
       setEditorContent('');
-      setTestcases([{ id: crypto.randomUUID(), input: '', answer: null, output: '', status: 'pending', isExpanded: true, time: -1 }]); // Allow null for answer
+      setTestcases([{ id: crypto.randomUUID(), input: '', answer: null, output: '', status: 'pending', time: -1 }]);
       return;
     }
 
@@ -634,6 +659,7 @@ export default function App() {
     // 3. Khi đã tải xong (isFileLoading là false), cập nhật state từ fileData.
     addLog(formatLogMessage(`Data for ${activeFileId} loaded. Populating UI.`));
     isLoadingDataRef.current = true; // Chặn auto-save ngay sau khi load
+    setIsDataDirty(false); // Đặt cờ dirty về false vì vừa load từ DB lên
 
     setEditorContent(fileData?.content || '');
 
@@ -659,13 +685,10 @@ export default function App() {
     
     if (fileData?.testcases && fileData.testcases.length > 0) { // Dùng spread (...) để đảm bảo tất cả các trường đã lưu (status, output, time) được giữ lại.
       // Dùng spread (...) để đảm bảo tất cả các trường đã lưu (status, output, time) được giữ lại.
-      setTestcases(fileData.testcases.map((tc: TestCase) => ({
-        ...tc,
-        isExpanded: false, // Luôn thu gọn test case khi tải file mới
-      })));
+      setTestcases(fileData.testcases);
     } else {
       // Nếu không có testcase nào, reset về trạng thái mặc định.
-      setTestcases([{ id: crypto.randomUUID(), input: '', answer: null, output: '', status: 'pending', isExpanded: true, time: -1 }]); // Allow null for answer
+      setTestcases([{ id: crypto.randomUUID(), input: '', answer: null, output: '', status: 'pending', time: -1 }]);
     }
 
     // Tắt cờ khóa sau một khoảng trễ để cho phép auto-save hoạt động lại.
@@ -673,35 +696,23 @@ export default function App() {
 
   }, [activeFileId, fileData, isFileLoading, isPythonFile]);
 
-  // Khối auto-save giờ đây đã bị chặn bởi isLoadingDataRef
+  // Cập nhật cờ dirty khi có thay đổi từ người dùng
   useEffect(() => {
     if (fileData && !isLoadingDataRef.current) { 
-      debouncedSaveFileData();
+      setIsDataDirty(true);
     }
-  }, [settings, testcases, debouncedSaveFileData]);
+  }, [settings, testcases, fileData]);
 
   const closeTab = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     closeFile(id);
   };
 
-  const debouncedSaveContent = useDebouncedCallback((path: string, content: string) => {
-    if (!path || path.startsWith('temp') || isLoadingDataRef.current) return;
-    addLog(formatLogMessage(`[Auto-Save] Saving content for ${path}...`));
-    saveFileContentMutation.mutate({ path, content }, {
-      onSuccess: () => {
-        removeUnsaved(path);
-        addLog(formatLogMessage(`[Auto-Save] Content for ${path} saved successfully.`));
-      },
-      onError: (err: any) => addLog(`[Auto-Save] FAILED to save content for ${path}: ${err.message}`),
-    });
-  }, globalConfig?.autoSaveDelay || 1500);
 
   const handleEditorChange = (value: string | undefined) => {
     const newContent = value || '';
     setEditorContent(newContent);
     addUnsaved(activeFileId);
-    debouncedSaveContent(activeFileId, newContent);
   };
 
   const insertSnippet = (content: string) => {
@@ -1212,9 +1223,18 @@ export default function App() {
                               index={index}
                               onUpdate={updateTestCase}
                               onRemove={removeTestCase}
-                              onToggle={toggleTestCase}
                               onRun={runSingleTestCase}
                               runStatus={runStatus}
+                              onOpenDiff={(expected, actual) => {
+                                setDiffExpected(expected);
+                                setDiffActual(actual);
+                                setIsDiffOpen(true);
+                              }}
+                              isDiffSupported={isDiffSupported}
+                          onOpenView={(tcData) => {
+                            setViewTcData(tcData);
+                            setIsViewTcOpen(true);
+                          }}
                             />
                           ))}
                         </div>
@@ -1304,6 +1324,20 @@ export default function App() {
           onSave={(newConfig) => saveGlobalConfigMutation.mutate(newConfig)}
         />
       )}
+
+      <DiffViewerModal
+        isOpen={isDiffOpen}
+        onClose={() => setIsDiffOpen(false)}
+        expected={diffExpected}
+        actual={diffActual}
+      />
+
+      <TestCaseViewerModal
+        isOpen={isViewTcOpen}
+        onClose={() => setIsViewTcOpen(false)}
+        tc={testcases.find(t => t.id === viewTcData?.id) || null}
+        onUpdate={updateTestCase}
+      />
 
       <SnippetManagerModal
         isOpen={isSnippetManagerOpen}

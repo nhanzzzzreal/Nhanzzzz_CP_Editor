@@ -2,15 +2,17 @@
     "lastWorkspace": "Z:\\CP",
     "gppPath": "g++",
     "pythonPath": "python",
-    "autoSaveDelay": 5000,
+    "autoSaveDelay": 10000,
     "editorFontSize": 14,
     "editorFontFamily": "Consolas, 'Courier New', monospace",
     "appVersion": "v1.0.0",
     "openFileIds": [
         "Z:/CP/Basic/quaylui/caitui/caitui.py",
-        "Z:/CP/working/aplusb.cpp"
+        "Z:/CP/working/aplusb.cpp",
+        "Z:/CP/working/yesnotest.py",
+        "Z:/CP/Problems/qmax/qmax.cpp"
     ],
-    "activeFileId": "Z:/CP/working/aplusb.cpp",
+    "activeFileId": "Z:/CP/Problems/qmax/qmax.cpp",
     "treeState": {
         "Z:/CP/temp": true,
         "Z:/CP/marisa": true
