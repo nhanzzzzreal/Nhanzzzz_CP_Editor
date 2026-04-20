@@ -78,7 +78,7 @@ export const TestCaseItem = React.memo(({
           >
             {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
-          <span className="text-xs font-bold text-gray-500">#{index + 1}</span>
+        <span className="text-xs font-bold text-gray-500">{(tc as any).name || `#${index + 1}`}</span>
           <StatusBadge status={tc.status} />
           {tc.time !== undefined && tc.time >= 0 && tc.status !== 'pending' && tc.status !== 'running' && (
             <span className="text-xs font-mono text-gray-500">
@@ -167,9 +167,12 @@ export const TestCaseItem = React.memo(({
                 </button>
               )}
             </div>
-            <div className="w-full h-24 bg-[#1e1e1e] border border-[#3c3c3c] rounded p-2 font-mono text-xs overflow-y-auto whitespace-pre-wrap text-gray-300">
-              {tc.output || <span className="text-gray-700 italic">No output</span>}
-            </div>
+            <textarea
+              readOnly
+              value={tc.output || ''}
+              placeholder="No output"
+              className="w-full h-24 bg-[#1e1e1e] border border-[#3c3c3c] rounded p-2 font-mono text-xs text-gray-300 focus:outline-none resize-none"
+            />
           </div>
         </div>
       )}

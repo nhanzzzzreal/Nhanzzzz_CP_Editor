@@ -8,12 +8,13 @@ const CHECKER_DESCRIPTIONS: Record<string, string> = {
   'hcmp.cpp': 'Compare huge integers (>64bit)',
   'lcmp.cpp': 'Compare line by line',
   'ncmp.cpp': 'Compare two 64-bit integers',
-  'nyesno.cpp': 'Compare multiple YES/NO, TRUE/FALSE, 0/1',
-  'yesno.cpp': 'Compare YES/NO, TRUE/FALSE, 0/1',
+  'nyesno.cpp': 'Compare multiple YES/NO, TRUE/FALSE, 0/1, ignore case',
+  'yesno.cpp': 'Compare YES/NO, TRUE/FALSE, 0/1, ignore case',
   'wcmp.cpp': 'Compare sequence of tokens/words',
   'rcmp4.cpp': 'Compare real numbers up to 4 decimal places',
   'rcmp6.cpp': 'Compare real numbers up to 6 decimal places',
   'rcmp9.cpp': 'Compare real numbers up to 9 decimal places',
+  'strict_cmp.cpp': 'Compare exact characters (Strict byte-by-byte)',
 };
 
 interface SettingsModalProps {
@@ -162,18 +163,6 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, isPython
                 <span className="text-sm text-gray-300 group-hover:text-white transition-colors">Use Sandbox (Run in Temp folder)</span>
               </label>
 
-              {/* FILE I/O OPTION */}
-              <label className="flex items-center gap-3 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={currentSettings.useFileIO ?? true}
-                  onChange={handleCommonChange}
-                  name="useFileIO"
-                  className="w-4 h-4 rounded border-[#3c3c3c] bg-[#1e1e1e] text-blue-600 focus:ring-0"
-                />
-                <span className="text-sm text-gray-300 group-hover:text-white transition-colors">File I/O</span>
-              </label>
-
               {/* C++ Specific Warnings */}
               {!isPythonFile && (
                 <>
@@ -201,20 +190,34 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, isPython
               )}
             </div>
 
-            <div className={cn("transition-all duration-300", currentSettings.useFileIO ? "opacity-100 h-auto" : "opacity-0 h-0 overflow-hidden")}>
-              <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">
-                I/O Filename (Optional)
-              </label>
-              <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-3 pt-2">
+              {/* FILE I/O OPTION */}
+              <label className="flex items-center gap-3 cursor-pointer group">
                 <input
-                  type="text"
-                  placeholder="Default: Same as code"
-                  value={currentSettings.customFileName || ''}
+                  type="checkbox"
+                  checked={currentSettings.useFileIO ?? true}
                   onChange={handleCommonChange}
-                  name="customFileName"
-                  className="flex-1 bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors"
+                  name="useFileIO"
+                  className="w-4 h-4 rounded border-[#3c3c3c] bg-[#1e1e1e] text-blue-600 focus:ring-0"
                 />
-                <div className="text-xs text-gray-500 font-mono">.inp / .out</div>
+                <span className="text-sm text-gray-300 group-hover:text-white transition-colors">File I/O</span>
+              </label>
+
+              <div className={cn("transition-all duration-300", currentSettings.useFileIO ? "opacity-100 h-auto" : "opacity-0 h-0 overflow-hidden")}>
+                <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">
+                  I/O Filename (Optional)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Default: Same as code"
+                    value={currentSettings.customFileName || ''}
+                    onChange={handleCommonChange}
+                    name="customFileName"
+                    className="flex-1 bg-[#1e1e1e] border border-[#3c3c3c] rounded px-3 py-2 text-sm focus:border-blue-500 outline-none transition-colors"
+                  />
+                  <div className="text-xs text-gray-500 font-mono">.inp / .out</div>
+                </div>
               </div>
             </div>
 

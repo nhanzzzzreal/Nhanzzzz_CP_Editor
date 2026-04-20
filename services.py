@@ -180,18 +180,21 @@ def execute_code_stream(path: str, code: str, settings_dict: dict, global_config
                 out_stdout, out_stderr = proc.communicate(input=input_data, timeout=timeout_sec + 1.0)
                 
                 # Phân tích kết quả từ Runner
-                lines = (out_stdout or "").strip().splitlines()
+                raw_stdout = out_stdout or ""
+                lines_for_json = raw_stdout.rstrip().splitlines()
                 runner_result = None
                 actual_stdout = ""
                 
-                if lines:
+                if lines_for_json:
                     try:
-                        # Runner.exe luôn in JSON ở dòng cuối cùng
-                        runner_result = json.loads(lines[-1])
-                        # Những dòng trước đó là output thực tế của code (nếu Standard IO)
-                        actual_stdout = "\n".join(lines[:-1])
+                        last_line = lines_for_json[-1]
+                        runner_result = json.loads(last_line)
+                        # Tìm vị trí của chuỗi JSON cuối cùng để tách lấy phần output thực tế
+                        # Điều này giúp giữ nguyên toàn bộ khoảng trắng/xuống dòng ở cuối của actual_stdout
+                        idx = raw_stdout.rfind(last_line)
+                        actual_stdout = raw_stdout[:idx]
                     except json.JSONDecodeError:
-                        actual_stdout = "\n".join(lines)
+                        actual_stdout = raw_stdout
                         runner_result = {"status": "RE", "error_msg": "Không thể parse JSON từ runner", "time_ms": 0}
                 else:
                     runner_result = {"status": "RE", "error_msg": "Runner không trả về kết quả", "time_ms": 0}
@@ -215,17 +218,19 @@ def execute_code_stream(path: str, code: str, settings_dict: dict, global_config
                 else:
                     # Nếu Runner đánh giá code chạy xong bình thường (AC), ta đi check kết quả đúng/sai
                     if settings.useFileIO:
-                        out_text = open(out_file, "r", encoding="utf-8").read().strip() if os.path.exists(out_file) else "Error: .out không tìm thấy"
+                        out_text = open(out_file, "r", encoding="utf-8").read() if os.path.exists(out_file) else "Error: .out không tìm thấy"
                     else:
-                        out_text = actual_stdout.strip()
+                        out_text = actual_stdout
 
-                    actual_output = out_text.strip().replace('\r\n', '\n')
-                    expected_answer = str(tc.get("answer") or "").strip().replace('\r\n', '\n')
+                    actual_output = out_text.replace('\r\n', '\n')
+                    expected_answer = str(tc.get("answer") or "").replace('\r\n', '\n')
 
                     if is_default_checker:
-                        if not expected_answer:
+                        ans_stripped = expected_answer.strip()
+                        out_stripped = actual_output.strip()
+                        if not ans_stripped:
                             status = "AC" 
-                        elif actual_output == expected_answer:
+                        elif out_stripped == ans_stripped:
                             status = "AC"
                         else:
                             status = "WA"

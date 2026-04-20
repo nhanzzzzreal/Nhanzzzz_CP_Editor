@@ -61,6 +61,7 @@ def init_folder_db(db_path: str):
             CREATE TABLE IF NOT EXISTS testcases (
                 id TEXT PRIMARY KEY, -- UUID của testcase từ frontend
                 problem_file_name TEXT NOT NULL, -- Khóa ngoại tới problems.file_name
+                name TEXT,
                 input TEXT, -- Có thể NULL khi mới tạo hoặc để trống
                 answer TEXT, -- Có thể NULL khi mới tạo hoặc để trống
                 output TEXT,
@@ -72,6 +73,10 @@ def init_folder_db(db_path: str):
         
         try:
             conn.execute("ALTER TABLE settings ADD COLUMN checker TEXT DEFAULT 'Ignore Trailing Space (Default)'")
+        except:
+            pass
+        try:
+            conn.execute("ALTER TABLE testcases ADD COLUMN name TEXT")
         except:
             pass
         return conn
@@ -131,25 +136,42 @@ def get_problem_data(code_file_path: str):
 
         # 2. Lấy testcases
         testcases = []
-        cursor.execute("""
-            SELECT id, input, answer, output, status, time
-            FROM testcases WHERE problem_file_name = ?
-            ORDER BY id -- Đảm bảo thứ tự nhất quán
-        """, (file_name,))
-        testcase_rows = cursor.fetchall()
+        try:
+            cursor.execute("""
+                SELECT id, name, input, answer, output, status, time
+                FROM testcases WHERE problem_file_name = ?
+                ORDER BY rowid
+            """, (file_name,))
+            testcase_rows = cursor.fetchall()
+            for tc_row in testcase_rows:
+                testcases.append({
+                    "id": tc_row[0],
+                    "name": tc_row[1],
+                    "input": tc_row[2],
+                    "answer": tc_row[3],
+                    "output": tc_row[4] if tc_row[4] is not None else "",
+                    "status": tc_row[5],
+                    "time": tc_row[6] if tc_row[6] is not None else -1
+                })
+        except sqlite3.OperationalError:
+            cursor.execute("""
+                SELECT id, input, answer, output, status, time
+                FROM testcases WHERE problem_file_name = ?
+                ORDER BY rowid
+            """, (file_name,))
+            testcase_rows = cursor.fetchall()
+            for tc_row in testcase_rows:
+                testcases.append({
+                    "id": tc_row[0],
+                    "input": tc_row[1],
+                    "answer": tc_row[2],
+                    "output": tc_row[3] if tc_row[3] is not None else "",
+                    "status": tc_row[4],
+                    "time": tc_row[5] if tc_row[5] is not None else -1
+                })
         
         if not settings_row and not testcase_rows:
             return None, []
-        
-        for tc_row in testcase_rows:
-            testcases.append({
-                "id": tc_row[0],
-                "input": tc_row[1],
-                "answer": tc_row[2],
-                "output": tc_row[3] if tc_row[3] is not None else "",
-                "status": tc_row[4],
-                "time": tc_row[5] if tc_row[5] is not None else -1
-            })
                 
         return settings_dict, testcases
 
@@ -227,12 +249,12 @@ def save_problem_data(code_file_path: str, settings_dict: dict, testcases_list: 
             testcase_data = []
             for tc in testcases_list:
                 testcase_data.append((
-                    tc.get("id"), file_name, tc.get("input"), tc.get("answer"),
+                    tc.get("id"), file_name, tc.get("name"), tc.get("input"), tc.get("answer"),
                     tc.get("output"), tc.get("status"), tc.get("time")
                 ))
             cursor.executemany("""
-                INSERT INTO testcases (id, problem_file_name, input, answer, output, status, time)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""", testcase_data)
+                INSERT INTO testcases (id, problem_file_name, name, input, answer, output, status, time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", testcase_data)
         conn.commit()
     except Exception as e:
         logger.error(f"Lỗi khi lưu dữ liệu cho {file_name}: {e}")

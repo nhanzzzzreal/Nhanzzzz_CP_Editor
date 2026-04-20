@@ -252,6 +252,73 @@ def open_workspace_dialog():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/testcases/import-dialog")
+def import_testcases_dialog():
+    import tkinter as tk
+    from tkinter import filedialog
+    import os
+    import re
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+
+        folder_path = filedialog.askdirectory(title="Select Testcases Folder")
+        root.destroy()
+
+        if not folder_path or not os.path.isdir(folder_path):
+            return {"status": "cancelled"}
+
+        file_map = {}
+        for root_dir, _, files in os.walk(folder_path):
+            for file in files:
+                file_lower = file.lower()
+                if file_lower.endswith('.inp') or file_lower.endswith('.out') or file_lower.endswith('.ans'):
+                    full_path = os.path.join(root_dir, file)
+                    rel_path = os.path.relpath(full_path, folder_path)
+                    base_key = os.path.splitext(rel_path)[0]
+                    
+                    if base_key not in file_map:
+                        file_map[base_key] = {'dir': os.path.basename(root_dir)}
+                    
+                    try:
+                        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+                            clean_content = f.read().replace('\r\n', '\n').replace('\r', '\n')
+                            if file_lower.endswith('.inp'):
+                                file_map[base_key]['inp'] = clean_content
+                            elif file_lower.endswith('.out') or file_lower.endswith('.ans'):
+                                file_map[base_key]['out'] = clean_content
+                    except Exception:
+                        pass
+
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+        
+        sorted_keys = sorted(file_map.keys(), key=natural_sort_key)
+        
+        testcases = []
+        base_folder_name = os.path.basename(os.path.normpath(folder_path))
+        
+        for k in sorted_keys:
+            data = file_map[k]
+            if 'inp' in data or 'out' in data:
+                dir_name = data.get('dir', '')
+                # Ưu tiên lấy tên thư mục chứa testcase làm tên nhãn
+                if dir_name and dir_name != base_folder_name:
+                    tc_name = dir_name
+                else:
+                    tc_name = os.path.basename(k)
+                testcases.append({
+                    "name": tc_name,
+                    "input": data.get('inp', ''),
+                    "answer": data.get('out')
+                })
+                
+        return {"status": "ok", "testcases": testcases}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/files/tree")
 def get_tree():
     # File Tree luôn bắt đầu từ thư mục workspace
@@ -265,8 +332,8 @@ async def get_diff(request: Request):
     data = await request.json()
     expected = data.get("expected", "")
     actual = data.get("actual", "")
-    expected_lines = expected.splitlines()
-    actual_lines = actual.splitlines()
+    expected_lines = expected.split('\n')
+    actual_lines = actual.split('\n')
     matcher = difflib.SequenceMatcher(None, expected_lines, actual_lines)
     return {
         "opcodes": matcher.get_opcodes(),
@@ -352,22 +419,28 @@ async def save_file_data(request: Request):
 
 
 @app.post("/api/run/stream")
-async def run_stream(req: RunAllReq):
+async def run_stream(request: Request):
+    body = await request.json()
+    path = body.get("path", "")
+    code = body.get("code", "")
+    settings_dict = body.get("settings", {})
+    global_config_dict = body.get("globalConfig")
+    testcases = body.get("testcases", [])
+
     # --- NEW WORKFLOW: SAVE BEFORE RUN ---
     # This ensures the database is the source of truth before execution starts.
     try:
         # 1. Save settings and testcases to DB. This is the most critical step for consistency.
         database.save_problem_data(
-            req.path, 
-            req.settings.model_dump(), 
-            [tc.model_dump() for tc in req.testcases]
+            path, 
+            settings_dict, 
+            testcases
         )
         
         # 2. Save the current code content to the physical file.
-        # This is important for the compiler/interpreter to find the correct code.
-        if not req.path.startswith("temp"):
-            with open(req.path, "w", encoding="utf-8", newline="") as f:
-                f.write(req.code)
+        if not path.startswith("temp"):
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(code)
     except Exception as e:
         # If saving fails, we cannot proceed. We must inform the client.
         async def error_stream():
@@ -377,13 +450,10 @@ async def run_stream(req: RunAllReq):
         return StreamingResponse(error_stream(), media_type="text/event-stream")
     # --- END NEW WORKFLOW ---
 
-    settings_dict = req.settings.model_dump()
-    global_config_dict = req.globalConfig.model_dump() if req.globalConfig else None
-
     return StreamingResponse(
         execute_code_stream(
-            req.path,
-            req.code, 
+            path,
+            code, 
             settings_dict,
             global_config_dict,
             workspace_dir=WORKSPACE_DIR

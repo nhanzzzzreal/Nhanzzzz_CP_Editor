@@ -72,6 +72,7 @@ export default function App() {
   
   // Refs
   const editorRef = useRef<any>(null); 
+  const sessionCache = useRef<Record<string, { content: string, settings: any, testcases: TestCase[] }>>({});
   const [settings, setSettings] = useState<AppSettings>(
     { // Default to CppSettings
     compiler: 'g++',
@@ -93,7 +94,7 @@ export default function App() {
   }, []);
 
   const [testcases, setTestcases] = useState<TestCase[]>([
-    { id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 }
+    { id: crypto.randomUUID(), name: 'Test 1', input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 } as TestCase
   ]);
 
   const terminalPanelRef = useRef<ImperativePanelHandle>(null);
@@ -288,14 +289,14 @@ export default function App() {
   }, [openFileIds, activeFileId, debouncedSaveGlobalConfig]);
 
   const addTestCase = () => {
-    setTestcases(prev => [...prev, { id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', time: -1 }]);
+    setTestcases(prev => [...prev, { id: crypto.randomUUID(), name: `Test ${prev.length + 1}`, input: '', answer: '', output: '', status: 'pending', time: -1 } as TestCase]);
   };
 
   const removeTestCase = (id: string) => {
     if (testcases.length > 1) {
       setTestcases(prev => prev.filter(tc => tc.id !== id));
     } else {
-      setTestcases([{ id: crypto.randomUUID(), input: '', answer: '', output: '', status: 'pending', time: -1 }]);
+      setTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: '', output: '', status: 'pending', time: -1 } as TestCase]);
     }
   };
 
@@ -499,50 +500,26 @@ export default function App() {
     });
   };
 
-  const folderInputRef = useRef<HTMLInputElement>(null);
-  const handleFolderSelect = () => {
-    folderInputRef.current?.click();
-  };
-
-  const onFolderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-
-    const fileMap: Record<string, { inp?: string, out?: string }> = {};
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const pathParts = file.webkitRelativePath.split('/');
-      if (pathParts.length < 2) continue;
-      
-      const folderName = pathParts[pathParts.length - 2];
-      const fileName = file.name.toLowerCase();
-      
-      if (!fileMap[folderName]) fileMap[folderName] = {};
-      
-      const rawContent = await file.text();
-      const cleanContent = rawContent.replace(/\r?\n|\r/g, "\n").trim(); 
-
-      if (fileName.endsWith('.inp')) fileMap[folderName].inp = cleanContent;
-      if (fileName.endsWith('.out')) fileMap[folderName].out = cleanContent;
+  const handleFolderSelect = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/testcases/import-dialog`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'ok' && data.testcases && data.testcases.length > 0) {
+        const loadedTestcases: TestCase[] = data.testcases.map((tc: any) => ({
+          id: crypto.randomUUID(),
+          name: tc.name,
+          input: tc.input,
+          answer: tc.answer,
+          output: '',
+          status: 'pending',
+          time: -1 
+        } as TestCase));
+        setTestcases(loadedTestcases);
+        addLog(formatLogMessage(`Loaded ${loadedTestcases.length} testcases from folder.`));
+      }
+    } catch (err: any) {
+      addLog(formatLogMessage(`Error importing testcases: ${err.message}`));
     }
-
-    const loadedTestcases: TestCase[] = Object.entries(fileMap)
-      .filter(([_, data]) => data.inp !== undefined || data.out !== undefined)
-      .map(([name, data]) => ({
-        id: crypto.randomUUID(),
-        input: data.inp || '',
-        answer: data.out || null, // Allow null for answer
-        output: '',
-        status: 'pending',
-        time: -1
-      }));
-
-    if (loadedTestcases.length > 0) {
-      setTestcases(loadedTestcases);
-      addLog(formatLogMessage(`Loaded ${loadedTestcases.length} testcases from folder.`));
-    }
-    e.target.value = '';
   };
 
   const handleFileSelect = (type: 'brute' | 'ac' | 'gen') => {
@@ -640,19 +617,46 @@ export default function App() {
   };
 
   const isLoadingDataRef = useRef(false);
+  const loadedFileIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Đồng bộ state hiện tại vào sessionCache liên tục để giữ RAM luôn fresh
+    if (activeFileId && activeFileId === loadedFileIdRef.current && !isLoadingDataRef.current) {
+      sessionCache.current[activeFileId] = {
+        content: editorContent,
+        settings,
+        testcases
+      };
+    }
+  }, [editorContent, settings, testcases, activeFileId]);
 
   useEffect(() => {
     // 1. Xử lý trường hợp không có file nào được chọn: reset về trạng thái mặc định.
     if (!activeFileId) {
       setEditorContent('');
-      setTestcases([{ id: crypto.randomUUID(), input: '', answer: null, output: '', status: 'pending', time: -1 }]);
+      setTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1 } as TestCase]);
+      loadedFileIdRef.current = null;
       return;
     }
 
-    // 2. Khi đang tải file mới (isFileLoading), reset testcases để tránh hiển thị dữ liệu cũ.
+    // --- CƠ CHẾ LOAD TRONG RAM (INSTANT LOAD) ---
+    // Nếu file đã từng mở trong phiên làm việc, lấy ngay từ cache mà không cần đợi API
+    if (sessionCache.current[activeFileId]) {
+      const cached = sessionCache.current[activeFileId];
+      isLoadingDataRef.current = true;
+      setEditorContent(cached.content);
+      setSettings(cached.settings);
+      setTestcases(cached.testcases);
+      loadedFileIdRef.current = activeFileId;
+      setTimeout(() => { isLoadingDataRef.current = false; }, 50);
+      return;
+    }
+
+    // 2. Khi đang tải file mới từ backend, reset testcases để tránh hiển thị dữ liệu cũ.
     if (isFileLoading) {
       addLog(formatLogMessage(`Loading data for ${activeFileId}...`));
       setTestcases([]);
+      loadedFileIdRef.current = null;
       return;
     }
 
@@ -661,36 +665,48 @@ export default function App() {
     isLoadingDataRef.current = true; // Chặn auto-save ngay sau khi load
     setIsDataDirty(false); // Đặt cờ dirty về false vì vừa load từ DB lên
 
-    setEditorContent(fileData?.content || '');
+    const newContent = fileData?.content || '';
+    setEditorContent(newContent);
 
+    let newSettings;
     if (fileData?.settings) { // Ensure the loaded settings match the expected type
       if (isPythonFile) {
-        setSettings(fileData.settings as PythonSettings);
+        newSettings = fileData.settings as PythonSettings;
       } else {
-        setSettings(fileData.settings as CppSettings);
+        newSettings = fileData.settings as CppSettings;
       }
     } else {
       // If no settings are found, initialize with defaults based on file type
       if (isPythonFile) {
-        setSettings({
+        newSettings = {
           compiler: 'python', timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '',
-        } as PythonSettings);
+        } as PythonSettings;
       } else {
-        setSettings({
+        newSettings = {
           compiler: 'g++', optimization: 'O2', warnings: true, extraWarnings: true, std: 'c++14',
           timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '',
-        } as CppSettings);
+        } as CppSettings;
       }
     }
+    setSettings(newSettings);
     
+    let newTestcases;
     if (fileData?.testcases && fileData.testcases.length > 0) { // Dùng spread (...) để đảm bảo tất cả các trường đã lưu (status, output, time) được giữ lại.
-      // Dùng spread (...) để đảm bảo tất cả các trường đã lưu (status, output, time) được giữ lại.
-      setTestcases(fileData.testcases);
+      newTestcases = fileData.testcases;
     } else {
       // Nếu không có testcase nào, reset về trạng thái mặc định.
-      setTestcases([{ id: crypto.randomUUID(), input: '', answer: null, output: '', status: 'pending', time: -1 }]);
+      newTestcases = [{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1 } as TestCase];
     }
+    setTestcases(newTestcases);
 
+    // Khởi tạo RAM Cache cho file này
+    sessionCache.current[activeFileId] = {
+      content: newContent,
+      settings: newSettings,
+      testcases: newTestcases
+    };
+
+    loadedFileIdRef.current = activeFileId;
     // Tắt cờ khóa sau một khoảng trễ để cho phép auto-save hoạt động lại.
     setTimeout(() => { isLoadingDataRef.current = false; }, 500);
 
@@ -1120,9 +1136,14 @@ export default function App() {
                     onKeyDown={(e) => e.stopPropagation()}
                   >
                     {activeFileId ? (
-                      !isFileLoading ? (
-                        <Editor // This should be isFileLoading
-                          key={activeFileId}
+                      <>
+                        {isFileLoading && (
+                          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#1e1e1e] text-gray-500 text-sm gap-3">
+                            <Loader2 size={24} className="animate-spin text-blue-500" />
+                            Đang tải nội dung file...
+                          </div>
+                        )}
+                        <Editor
                           height="100%"
                           language={getLanguage(activeFileId)}
                           theme="vs-dark"
@@ -1144,12 +1165,7 @@ export default function App() {
                             smoothScrolling: true,
                           }}
                         />
-                      ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-gray-500 text-sm gap-3">
-                          <Loader2 size={24} className="animate-spin text-blue-500" />
-                          Đang tải nội dung file...
-                        </div>
-                      )
+                      </>
                     ) : (
                       <div className="h-full flex items-center justify-center text-gray-600 italic text-sm">
                         Select a file, or drop one here.
@@ -1359,14 +1375,6 @@ export default function App() {
         className="hidden"
         onChange={onFileChange}
         accept=".cpp,.c,.py,.java,.txt"
-      />
-
-      <input
-        type="file"
-        ref={folderInputRef}
-        className="hidden"
-        onChange={onFolderChange}
-        {...({ webkitdirectory: "", directory: "" } as any)}
       />
 
       {contextMenu.visible && contextMenu.node && (
