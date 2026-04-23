@@ -10,7 +10,8 @@ const terminalOptions: ITerminalOptions = {
   cursorBlink: true,
   convertEol: true, // Important for Windows
   fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-  fontSize: 13,
+  fontSize: 14,
+  fontWeight: 'normal',
   theme: {
     background: '#1e1e1e',
     foreground: '#cccccc',
@@ -20,7 +21,7 @@ const terminalOptions: ITerminalOptions = {
     red: '#cd3131',
     green: '#0dbc79',
     yellow: '#e5e510',
-    blue: '#3b8eea',
+    blue: '#2472c8',
     magenta: '#bc3fbc',
     cyan: '#11a8cd',
     white: '#e5e5e5',
@@ -37,7 +38,7 @@ const terminalOptions: ITerminalOptions = {
   disableStdin: true,
 };
 
-export const Terminal = ({ logs, onClear }: { logs: string[], onClear: () => void }) => {
+export const Terminal = React.memo(({ logs, onClear }: { logs: string[], onClear: () => void }) => {
   const termRef: RefObject<XtermTerminal> = useRef<XtermTerminal>(null);
   const containerRef: RefObject<HTMLDivElement> = useRef<HTMLDivElement>(null);
   const prevLogsLengthRef = useRef(0);
@@ -113,10 +114,10 @@ export const Terminal = ({ logs, onClear }: { logs: string[], onClear: () => voi
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#1a1a1a]">
+    <div className="h-full flex flex-col bg-[#1e1e1e]">
       <header className="flex items-center justify-between px-3 py-1.5 border-b border-[#333] shrink-0">
         <div className="flex items-center gap-2">
-            <TerminalIcon size={14} />
+            <TerminalIcon size={14} className="text-gray-400" />
             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Terminal</span>
         </div>
         <div className="flex items-center gap-2">
@@ -136,4 +137,4 @@ export const Terminal = ({ logs, onClear }: { logs: string[], onClear: () => voi
       </div>
     </div>
   );
-};
+});

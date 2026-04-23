@@ -67,6 +67,7 @@ def init_folder_db(db_path: str):
                 output TEXT,
                 status TEXT NOT NULL,
                 time INTEGER,
+                memory INTEGER,
                 FOREIGN KEY (problem_file_name) REFERENCES problems(file_name) ON DELETE CASCADE
             )""")
         conn.commit()
@@ -77,6 +78,10 @@ def init_folder_db(db_path: str):
             pass
         try:
             conn.execute("ALTER TABLE testcases ADD COLUMN name TEXT")
+        except:
+            pass
+        try:
+            conn.execute("ALTER TABLE testcases ADD COLUMN memory INTEGER")
         except:
             pass
         return conn
@@ -138,7 +143,7 @@ def get_problem_data(code_file_path: str):
         testcases = []
         try:
             cursor.execute("""
-                SELECT id, name, input, answer, output, status, time
+                SELECT id, name, input, answer, output, status, time, memory
                 FROM testcases WHERE problem_file_name = ?
                 ORDER BY rowid
             """, (file_name,))
@@ -151,24 +156,45 @@ def get_problem_data(code_file_path: str):
                     "answer": tc_row[3],
                     "output": tc_row[4] if tc_row[4] is not None else "",
                     "status": tc_row[5],
-                    "time": tc_row[6] if tc_row[6] is not None else -1
+                    "time": tc_row[6] if tc_row[6] is not None else -1,
+                    "memory": tc_row[7] if len(tc_row) > 7 and tc_row[7] is not None else -1
                 })
         except sqlite3.OperationalError:
-            cursor.execute("""
-                SELECT id, input, answer, output, status, time
-                FROM testcases WHERE problem_file_name = ?
-                ORDER BY rowid
-            """, (file_name,))
-            testcase_rows = cursor.fetchall()
-            for tc_row in testcase_rows:
-                testcases.append({
-                    "id": tc_row[0],
-                    "input": tc_row[1],
-                    "answer": tc_row[2],
-                    "output": tc_row[3] if tc_row[3] is not None else "",
-                    "status": tc_row[4],
-                    "time": tc_row[5] if tc_row[5] is not None else -1
-                })
+            try:
+                cursor.execute("""
+                    SELECT id, name, input, answer, output, status, time
+                    FROM testcases WHERE problem_file_name = ?
+                    ORDER BY rowid
+                """, (file_name,))
+                testcase_rows = cursor.fetchall()
+                for tc_row in testcase_rows:
+                    testcases.append({
+                        "id": tc_row[0],
+                        "name": tc_row[1],
+                        "input": tc_row[2],
+                        "answer": tc_row[3],
+                        "output": tc_row[4] if tc_row[4] is not None else "",
+                        "status": tc_row[5],
+                        "time": tc_row[6] if tc_row[6] is not None else -1,
+                        "memory": -1
+                    })
+            except sqlite3.OperationalError:
+                cursor.execute("""
+                    SELECT id, input, answer, output, status, time
+                    FROM testcases WHERE problem_file_name = ?
+                    ORDER BY rowid
+                """, (file_name,))
+                testcase_rows = cursor.fetchall()
+                for tc_row in testcase_rows:
+                    testcases.append({
+                        "id": tc_row[0],
+                        "input": tc_row[1],
+                        "answer": tc_row[2],
+                        "output": tc_row[3] if tc_row[3] is not None else "",
+                        "status": tc_row[4],
+                        "time": tc_row[5] if tc_row[5] is not None else -1,
+                        "memory": -1
+                    })
         
         if not settings_row and not testcase_rows:
             return None, []
@@ -250,16 +276,43 @@ def save_problem_data(code_file_path: str, settings_dict: dict, testcases_list: 
             for tc in testcases_list:
                 testcase_data.append((
                     tc.get("id"), file_name, tc.get("name"), tc.get("input"), tc.get("answer"),
-                    tc.get("output"), tc.get("status"), tc.get("time")
+                    tc.get("output"), tc.get("status"), tc.get("time"), tc.get("memory", -1)
                 ))
-            cursor.executemany("""
-                INSERT INTO testcases (id, problem_file_name, name, input, answer, output, status, time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", testcase_data)
+            try:
+                cursor.executemany("""
+                    INSERT INTO testcases (id, problem_file_name, name, input, answer, output, status, time, memory)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", testcase_data)
+            except sqlite3.OperationalError:
+                testcase_data_old = []
+                for tc in testcases_list:
+                    testcase_data_old.append((
+                        tc.get("id"), file_name, tc.get("name"), tc.get("input"), tc.get("answer"),
+                        tc.get("output"), tc.get("status"), tc.get("time")
+                    ))
+                cursor.executemany("""
+                    INSERT INTO testcases (id, problem_file_name, name, input, answer, output, status, time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", testcase_data_old)
         conn.commit()
     except Exception as e:
         logger.error(f"Lỗi khi lưu dữ liệu cho {file_name}: {e}")
     finally:
         conn.close()
+
+def update_testcase_result(code_file_path: str, tc_id: str, output: str, status: str, time: int, memory: float):
+    """Chỉ cập nhật kết quả của một testcase cụ thể để tối ưu hiệu suất khi chạy hàng loạt."""
+    db_path, file_name = get_db_info(code_file_path)
+    if not db_path or not os.path.exists(db_path):
+        return
+        
+    try:
+        with sqlite3.connect(db_path, timeout=5) as conn:
+            conn.execute("""
+                UPDATE testcases 
+                SET output = ?, status = ?, time = ?, memory = ?
+                WHERE id = ? AND problem_file_name = ?
+            """, (output, status, time, memory, tc_id, file_name))
+    except Exception as e:
+        logger.error(f"Lỗi khi cập nhật kết quả testcase {tc_id}: {e}")
 
 def rename_problem_data(old_code_path: str, new_code_path: str):
     """Đổi tên an toàn, không crash nếu file DB không tồn tại."""

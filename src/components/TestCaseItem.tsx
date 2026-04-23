@@ -26,7 +26,7 @@ function StatusBadge({ status }: { status: TestStatus }) {
   }
 }
 
-export const TestCaseItem = React.memo(({
+const TestCaseItemComponent = ({
   tc,
   index,
   onUpdate,
@@ -35,7 +35,9 @@ export const TestCaseItem = React.memo(({
   runStatus,
   onOpenDiff,
   isDiffSupported,
-  onOpenView
+  onOpenView,
+  isExpanded: controlledIsExpanded,
+  onToggleExpand
 }: {
   tc: TestCase,
   index: number,
@@ -45,21 +47,28 @@ export const TestCaseItem = React.memo(({
   runStatus: 'idle' | 'compiling' | 'running',
   onOpenDiff: (expected: string, actual: string) => void,
   isDiffSupported: boolean,
-  onOpenView: (tc: TestCase) => void
+  onOpenView: (tc: TestCase) => void,
+  isExpanded?: boolean,
+  onToggleExpand?: () => void
 }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  // State cục bộ cho các input để tránh re-render toàn bộ danh sách mỗi khi gõ
-  const [localInput, setLocalInput] = useState(tc.input);
-  const [localAnswer, setLocalAnswer] = useState(tc.answer);
+  const [localIsExpanded, setLocalIsExpanded] = useState(false);
+  const isExpanded = controlledIsExpanded !== undefined ? controlledIsExpanded : localIsExpanded;
 
-  // Đồng bộ state cục bộ nếu prop thay đổi từ bên ngoài (ví dụ: tải từ thư mục)
-  useEffect(() => {
-    setLocalInput(tc.input);
-  }, [tc.input]);
+  const handleToggle = () => {
+    if (onToggleExpand) onToggleExpand();
+    else setLocalIsExpanded(!localIsExpanded);
+  };
+  // CHỈ NẠP STATE NẾU ĐƯỢC EXPAND ĐỂ TRÁNH TRÀN RAM
+  const [localInput, setLocalInput] = useState('');
+  const [localAnswer, setLocalAnswer] = useState('');
 
   useEffect(() => {
-    setLocalAnswer(tc.answer);
-  }, [tc.answer]);
+    if (isExpanded) setLocalInput(tc.input || '');
+  }, [tc.input, isExpanded]);
+
+  useEffect(() => {
+    if (isExpanded) setLocalAnswer(tc.answer || '');
+  }, [tc.answer, isExpanded]);
 
   const handleBlur = (field: 'input' | 'answer', value: string) => {
     // Chỉ cập nhật state cha nếu giá trị thực sự thay đổi
@@ -69,11 +78,11 @@ export const TestCaseItem = React.memo(({
   };
 
   return (
-    <div className="relative group border-l-2 pl-4 py-1 mb-4" style={{ borderColor: getStatusColor(tc.status) }}>
-      <div className="flex items-center justify-between mb-2">
+    <div className="relative group border-l-2 pl-4 py-1 mb-1" style={{ borderColor: getStatusColor(tc.status) }}>
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setIsExpanded(!isExpanded)}
+            onClick={handleToggle}
             className="p-1 hover:bg-[#333] rounded transition-colors text-gray-400"
           >
             {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -82,7 +91,7 @@ export const TestCaseItem = React.memo(({
           <StatusBadge status={tc.status} />
           {tc.time !== undefined && tc.time >= 0 && tc.status !== 'pending' && tc.status !== 'running' && (
             <span className="text-xs font-mono text-gray-500">
-              ({tc.status === 'TLE' ? `${tc.time}+` : tc.time}ms)
+              ({tc.status === 'TLE' ? `${tc.time}+` : tc.time}ms{tc.memory !== undefined && tc.memory >= 0 && `, ${tc.memory}MB`})
             </span>
           )}
         </div>
@@ -178,4 +187,12 @@ export const TestCaseItem = React.memo(({
       )}
     </div>
   );
+};
+
+// TUYỆT KỸ: Chặn React re-render nếu đối tượng Testcase không bị thay đổi dữ liệu gốc
+export const TestCaseItem = React.memo(TestCaseItemComponent, (prevProps, nextProps) => {
+  return prevProps.tc === nextProps.tc &&
+         prevProps.index === nextProps.index &&
+         prevProps.runStatus === nextProps.runStatus &&
+         prevProps.isExpanded === nextProps.isExpanded;
 });

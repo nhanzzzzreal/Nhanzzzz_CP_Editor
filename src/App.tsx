@@ -1,22 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import Editor from '@monaco-editor/react';
-import { Play, Terminal as TerminalIcon, FlaskConical, X, Upload, GripVertical, GripHorizontal, Plus, FolderOpen, Trash2, Settings as SettingsIcon, File, Folder, Loader2, FilePlus, FolderTree, Scissors, Zap, GitCompare } from 'lucide-react';
-import {
-  Tree,
-  UncontrolledTreeEnvironment,
-  StaticTreeDataProvider,
-  TreeItem, TreeItemRenderContext,
-  TreeItemIndex,
-} from 'react-complex-tree';
-import { useQueryClient } from '@tanstack/react-query';
-import 'react-complex-tree/lib/style.css';
+import * as monaco from 'monaco-editor';
+import { Play, Terminal as TerminalIcon, FlaskConical, GripVertical, GripHorizontal, FolderOpen, Settings as SettingsIcon, Folder, Loader2, FilePlus, FolderTree, Scissors } from 'lucide-react';
 import { PanelGroup, Panel, PanelResizeHandle, ImperativePanelHandle } from 'react-resizable-panels';
 import { useDebouncedCallback } from 'use-debounce';
 
 import { cn } from './lib/utils';
 import { AppSettings, FileNode, FileState, GlobalConfig, TestCase, CppSettings, PythonSettings } from './types';
 import { useAppStore } from './store';
-import { useCreateItemMutation, useDeleteItemMutation, useFileDataQuery, useFileTreeQuery, useGlobalConfigQuery, useOpenFileDialogMutation, useOpenWorkspaceMutation, useRenameItemMutation, useRunCodeMutation, useSaveFileContentMutation, useSaveFileDataMutation, useSaveGlobalConfigMutation } from './api';
+import { useDataStore } from './dataStore';
 
 // --- Component Imports ---
 import { SettingsModal } from './components/SettingsModal';
@@ -27,10 +18,24 @@ import { SnippetMenu } from './components/SnippetMenu';
 import { GlobalSettingsModal } from './components/GlobalSettingsModal';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { DiffViewerModal } from './components/DiffViewerModal';
+import { MonacoEditor, CodeEditorRef } from './components/MonacoEditor';
 import { TestCaseViewerModal } from './components/TestCaseViewerModal';
+import { FileExplorer } from './components/FileExplorer';
+import { useCodeExecution } from './hooks/useCodeExecution';
+import { useTreeOperations } from './hooks/useTreeOperations';
+import { TestcaseManager } from './components/TestcaseManager';
+import { StressTest } from './components/StressTest';
+import { FileTabs } from './components/FileTabs';
 
 // --- Constants ---
 const API_BASE_URL = 'http://localhost:3691/api'; // Default FastAPI port
+
+const getLanguage = (filename: string) => {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.py')) return 'python';
+  if (lower.endsWith('.cpp') || lower.endsWith('.c') || lower.endsWith('.h') || lower.endsWith('.hpp')) return 'cpp';
+  return 'plaintext';
+};
 
 export default function App() {
   const formatLogMessage = useCallback((message: string): string => {
@@ -54,12 +59,14 @@ export default function App() {
     unsavedFileIds, addUnsaved, removeUnsaved,
     contextMenu, showContextMenu, hideContextMenu,
     openFile, closeFile,
+    monacoModels, addMonacoModel, updateMonacoModelCursor, removeMonacoModel,
     hydrate: hydrateStore,
   } = useAppStore();
 
+  // Helper to determine if the active file is Python
+  const isPythonFile = useMemo(() => activeFileId.toLowerCase().endsWith('.py'), [activeFileId]);
+
   // Local State
-  const [isStressing, setIsStressing] = useState(false);
-  const [editorContent, setEditorContent] = useState<string>('');
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   
   const [isDiffOpen, setIsDiffOpen] = useState(false);
@@ -69,10 +76,29 @@ export default function App() {
   const [isViewTcOpen, setIsViewTcOpen] = useState(false);
   const [viewTcData, setViewTcData] = useState<TestCase | null>(null);
   const [isDataDirty, setIsDataDirty] = useState(false);
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  const [isFileLoading, setIsFileLoading] = useState(false);
+  const isSettingFromLoad = useRef(false);
   
+  // Đồng bộ lại testcases từ Database sau khi chạy xong
+  const prevRunStatus = useRef(runStatus);
+  useEffect(() => {
+    if (prevRunStatus.current !== 'idle' && runStatus === 'idle') {
+      if (activeFileId && !activeFileId.startsWith('temp')) {
+        refreshFileData(activeFileId, isPythonFile).then(cache => {
+          if (cache && cache.testcases && cache.testcases.length > 0) {
+            isSettingFromLoad.current = true;
+            setTestcases(cache.testcases);
+            setTimeout(() => { isSettingFromLoad.current = false; }, 50);
+          }
+        });
+      }
+    }
+    prevRunStatus.current = runStatus;
+  }, [runStatus, activeFileId, isPythonFile]);
+
   // Refs
-  const editorRef = useRef<any>(null); 
-  const sessionCache = useRef<Record<string, { content: string, settings: any, testcases: TestCase[] }>>({});
+  const editorRef = useRef<CodeEditorRef>(null);
   const [settings, setSettings] = useState<AppSettings>(
     { // Default to CppSettings
     compiler: 'g++',
@@ -94,68 +120,67 @@ export default function App() {
   }, []);
 
   const [testcases, setTestcases] = useState<TestCase[]>([
-    { id: crypto.randomUUID(), name: 'Test 1', input: '', answer: '', output: '', status: 'pending', isExpanded: true, time: -1 } as TestCase
+    { id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 } as any
   ]);
 
   const terminalPanelRef = useRef<ImperativePanelHandle>(null);
   const treePanelRef = useRef<ImperativePanelHandle>(null);
+  const rightPanelRef = useRef<ImperativePanelHandle>(null);
   
-  const [bruteFile, setBruteFile] = useState<FileState | null>(null);
-  const [acFile, setAcFile] = useState<FileState | null>(null);
-  const [genFile, setGenFile] = useState<FileState | null>(null);
+  // Zustand Data Store
+  const {
+    globalConfig, fileTree, isFileTreeLoading,
+    fetchGlobalConfig, saveGlobalConfig,
+    fetchFileTree, loadFileData, refreshFileData,
+    updateFileCache, saveFileData, saveFileContent,
+    openWorkspace, openFileDialog
+  } = useDataStore();
 
-  // Helper to determine if the active file is Python
-  const isPythonFile = useMemo(() => activeFileId.endsWith('.py'), [activeFileId]);
+  useEffect(() => {
+    fetchGlobalConfig();
+    fetchFileTree();
+  }, [fetchGlobalConfig, fetchFileTree]);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [currentSelecting, setCurrentSelecting] = useState<'brute' | 'ac' | 'gen' | null>(null);
-
-  // TanStack Query Hooks
-  const queryClient = useQueryClient();
-  const { data: globalConfig, isLoading: isGlobalConfigLoading } = useGlobalConfigQuery();
-  const { data: fileTree = [], isLoading: isFileTreeLoading, refetch: refreshTree } = useFileTreeQuery();
-  const { data: fileData, isLoading: isFileLoading } = useFileDataQuery(activeFileId);
-
-  // Mutations
-  const saveGlobalConfigMutation = useSaveGlobalConfigMutation();
-  const saveFileContentMutation = useSaveFileContentMutation();
-  const saveFileDataMutation = useSaveFileDataMutation();
-  const createItemMutation = useCreateItemMutation();
-  const renameItemMutation = useRenameItemMutation();
-  const deleteItemMutation = useDeleteItemMutation();
-  const openWorkspaceMutation = useOpenWorkspaceMutation();
-  const openFileDialogMutation = useOpenFileDialogMutation();
-  const runCodeMutation = useRunCodeMutation();
+  useEffect(() => {
+    const evtSource = new EventSource(`${API_BASE_URL}/files/watch`);
+    evtSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.event === 'change') {
+          fetchFileTree(true); // Chỉ cập nhật dữ liệu ngầm, không bật màn hình Loading
+        }
+      } catch (e) {}
+    };
+    return () => {
+      evtSource.close();
+    };
+  }, [fetchFileTree]);
 
   const handleFileOpenClick = useCallback(async () => {
-    openFileDialogMutation.mutate(undefined, {
-      onSuccess: (data) => {
-      if (data.status === 'ok') {
-        const { path: fileId, name: fileName } = data;
-        openFile(fileId); // This will trigger fileDataQuery and subsequent loading
-        addLog(formatLogMessage(`Opened file: ${fileName}`));
-        // Refresh tree to ensure new file is visible if it was created/opened outside the tree
-        refreshTree();
-      }
-      },
-      onError: (error: any) => {
-        addLog(`Error opening file: ${error.message}`);
-      }
-    });
-  }, [openFileDialogMutation, openFile, addLog, refreshTree]);
+    const data = await openFileDialog();
+    if (data) {
+      openFile(data.path);
+      addLog(formatLogMessage(`Opened file: ${data.name}`));
+      fetchFileTree();
+    }
+  }, [openFileDialog, openFile, addLog, fetchFileTree, formatLogMessage]);
 
   const saveActiveFile = useCallback(() => {
     if (!activeFileId || activeFileId.startsWith('temp')) return;
     let saved = false;
     
-    if (unsavedFileIds.has(activeFileId)) {
-      saveFileContentMutation.mutate({ path: activeFileId, content: editorRef.current?.getValue() || '' });
+    const state = latestStateRef.current;
+
+    if (state.unsavedFileIds.has(activeFileId)) {
+      const currentContent = editorRef.current?.getValue() || '';
+        saveFileContent(activeFileId, currentContent);
       removeUnsaved(activeFileId);
       saved = true;
     }
     
-    if (isDataDirty) {
-      saveFileDataMutation.mutate({ path: activeFileId, settings, testcases });
+    if (state.isDataDirty) {
+        updateFileCache(activeFileId, { settings: state.settings, testcases: state.testcases });
+        saveFileData(activeFileId);
       setIsDataDirty(false);
       saved = true;
     }
@@ -165,28 +190,73 @@ export default function App() {
     } else {
       addLog(formatLogMessage(`No changes to save.`));
     }
-  }, [activeFileId, unsavedFileIds, isDataDirty, settings, testcases, addLog, removeUnsaved, saveFileContentMutation, saveFileDataMutation]);
+  }, [activeFileId, addLog, removeUnsaved, saveFileContent, saveFileData, updateFileCache, formatLogMessage]);
 
   const handleOpenWorkspace = useCallback(async () => {
-    openWorkspaceMutation.mutate(undefined, {
-      onSuccess: (data) => {
-      if (data.status === 'ok' && data.path) {
-        addLog(`Workspace changed to: ${data.path}`);
-        setOpenFileIds([]);
-        setActiveFileId('');
-      }
-      },
-      onError: (err: any) => addLog(`Error opening workspace: ${err.message}`),
-    });
-  }, [openWorkspaceMutation, addLog, setOpenFileIds, setActiveFileId]);
-
-  const treeViewState = useMemo(() => ({
-    ['tree-1']: {
-      // expandedItems: [], // Tạm thời không quản lý state expand/collapse ở đây
-      focusedItem: activeFileId || undefined,
-      selectedItems: activeFileId ? [activeFileId] : [],
+    const path = await openWorkspace();
+    if (path) {
+      addLog(`Workspace changed to: ${path}`);
+      setOpenFileIds([]);
+      setActiveFileId('');
+      fetchFileTree();
+      fetchGlobalConfig();
     }
-  }), [activeFileId]);
+  }, [openWorkspace, addLog, setOpenFileIds, setActiveFileId, fetchFileTree, fetchGlobalConfig]);
+
+  const handleTabSwitch = useCallback((id: string) => {
+    if (id === activeFileId) return;
+    
+    const state = latestStateRef.current;
+
+    // Lưu trạng thái file hiện tại vào RAM cache trước khi rời đi
+    if (activeFileId && editorRef.current) {
+      updateFileCache(activeFileId, { settings: state.settings, testcases: state.testcases });
+      if (state.isDataDirty) {
+        saveFileData(activeFileId);
+      }
+    }
+
+    // BATCH UPDATE: Cập nhật song song state để tránh "Zombie UI" (Chớp giao diện)
+    const targetCache = useDataStore.getState().fileCache[id];
+    isSettingFromLoad.current = true;
+    setIsDataDirty(false);
+    setActiveFileId(id);
+    
+    if (targetCache) {
+      setSettings(targetCache.settings);
+      setTestcases(targetCache.testcases);
+    } else {
+      setTestcases([]);
+    }
+    setTimeout(() => { isSettingFromLoad.current = false; }, 50);
+  }, [activeFileId, updateFileCache, saveFileData, setActiveFileId]);
+
+  const { handleCreateItem, handleRenameNode, handleDeleteNode } = useTreeOperations(formatLogMessage);
+
+  const findFileById = useCallback((id: string, nodes: FileNode[]): FileNode | null => {
+    for (const node of nodes) {
+      if (node.id === id) return node;
+      if (node.children) {
+        const found = findFileById(id, node.children);
+        if (found) return found;
+      }
+    }
+    return null;
+  }, []);
+  const activeFile = useMemo(() => findFileById(activeFileId, fileTree), [activeFileId, fileTree, findFileById]);
+
+  const { handleRun, runSingleTestCase } = useCodeExecution({
+    activeFileId,
+    activeFile,
+    editorRef,
+    settings,
+    globalConfig,
+    testcases,
+    setTestcases,
+    isFileLoading,
+    setIsDataDirty,
+    formatLogMessage
+  });
 
   // --- Hotkeys ---
   // Cấu hình để phím tắt hoạt động ngay cả khi đang focus vào editor hoặc input
@@ -226,17 +296,6 @@ export default function App() {
   }, hotkeyOptions, [setIsSnippetMenuOpen]);
   // --- End Hotkeys ---
 
-  const findFileById = (id: string, nodes: FileNode[]): FileNode | null => {
-    for (const node of nodes) {
-      if (node.id === id) return node;
-      if (node.children) {
-        const found = findFileById(id, node.children);
-        if (found) return found;
-      }
-    }
-    return null;
-  };
-  const activeFile = findFileById(activeFileId, fileTree);
 
   // --- NEW ARCHITECTURE: PERIODIC SYNC TO USB (RAM-first approach) ---
   // Sử dụng ref để đảm bảo setInterval luôn đọc được state mới nhất mà không bị reset timer khi gõ phím
@@ -253,17 +312,19 @@ export default function App() {
       const state = latestStateRef.current;
       if (state.activeFileId && !state.activeFileId.startsWith('temp')) {
         if (state.unsavedFileIds.has(state.activeFileId)) {
-          saveFileContentMutation.mutate({ path: state.activeFileId, content: editorRef.current?.getValue() || '' });
+          const currentContent = editorRef.current?.getValue() || '';
+            saveFileContent(state.activeFileId, currentContent);
           removeUnsaved(state.activeFileId);
         }
         if (state.isDataDirty) {
-          saveFileDataMutation.mutate({ path: state.activeFileId, settings: state.settings, testcases: state.testcases });
+            updateFileCache(state.activeFileId, { settings: state.settings, testcases: state.testcases });
+            saveFileData(state.activeFileId);
           setIsDataDirty(false);
         }
       }
     }, delay);
-    return () => clearInterval(timer);
-  }, [globalConfig?.autoSaveDelay, saveFileContentMutation, saveFileDataMutation, removeUnsaved]);
+    return () => clearInterval(timer); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [globalConfig?.autoSaveDelay, saveFileContent, saveFileData, removeUnsaved, updateFileCache]);
 
   // Hydrate store with initial file state from global config
   const isHydrated = useRef(false);
@@ -275,7 +336,7 @@ export default function App() {
   }, [globalConfig, hydrateStore]);
 
   const debouncedSaveGlobalConfig = useDebouncedCallback((config: GlobalConfig) => {
-    saveGlobalConfigMutation.mutate(config);
+    saveGlobalConfig(config);
   }, 1500);
 
   // Dùng useRef để giữ config mới nhất mà không kích hoạt lại useEffect
@@ -288,295 +349,19 @@ export default function App() {
     }
   }, [openFileIds, activeFileId, debouncedSaveGlobalConfig]);
 
-  const addTestCase = () => {
-    setTestcases(prev => [...prev, { id: crypto.randomUUID(), name: `Test ${prev.length + 1}`, input: '', answer: '', output: '', status: 'pending', time: -1 } as TestCase]);
-  };
-
-  const removeTestCase = (id: string) => {
-    if (testcases.length > 1) {
-      setTestcases(prev => prev.filter(tc => tc.id !== id));
-    } else {
-      setTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: '', output: '', status: 'pending', time: -1 } as TestCase]);
-    }
-  };
-
-  const updateTestCase = (id: string, field: keyof TestCase, value: string) => {
+  // Function to update a single testcase, now defined in App.tsx to be passed to TestCaseViewerModal
+  const updateTestCase = useCallback((id: string, field: keyof TestCase, value: string) => {
     setTestcases(prev => prev.map(tc => tc.id === id ? { ...tc, [field]: value } : tc));
-  };
+    setIsDataDirty(true); // Mark data as dirty when a testcase is updated
+  }, []);
+  
+  const handleOpenDiff = useCallback((expected: string, actual: string) => { 
+    setDiffExpected(expected); setDiffActual(actual); setIsDiffOpen(true); 
+  }, []);
 
-  const runSingleTestCase = async (id: string) => {
-    if (isFileLoading) {
-      addLog('⏳ Vui lòng chờ testcases tải xong trước khi chạy...');
-      return;
-    }
-    const tc = testcases.find(t => t.id === id);
-    if (!tc) return;
-
-    const codeToRun = editorRef.current?.getValue();
-    
-    if (!activeFile || codeToRun === undefined) {
-      addLog('Lỗi: Không có file hoặc nội dung code để chạy.');
-      return;
-    }
-
-    const isPython = (settings as any).compiler.toLowerCase().includes('python'); // Check compiler from current settings
-    setRunStatus(isPython ? 'running' : 'compiling');
-    addLog(`Running single testcase #${testcases.findIndex(t => t.id === id) + 1}...`);
-    setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'running', output: '', time: undefined } : t));
-
-    runCodeMutation.mutate({
-          path: activeFileId,
-          code: codeToRun,
-          testcases: [tc],
-          settings: settings,
-          globalConfig: globalConfig,
-    }, {
-      onSuccess: async (response) => {
-        try {
-          if (!response.body) throw new Error("No response body");
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          
-          let buffer = ''; 
-
-          while (true) {
-            // ... (Phần logic while và for parse JSON giữ nguyên y hệt) ...
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; 
-
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try {
-                const data = JSON.parse(line);
-                
-                if (data.type === 'compile_finish') {
-                  setRunStatus('running');
-                  if (data.log) addLog(formatLogMessage(`Compiler Log:\n${data.log}`));
-                } else if (data.type === 'test_result') {
-                  const res = data.result;
-                  setTestcases(prev => prev.map(t => {
-                    if (t.id !== res.id) return t;                    
-                    const finalStatus = res.status; // Trust backend status
-
-                    if (finalStatus !== 'AC') {
-                      addLog(formatLogMessage(`> Single Testcase FAILED. Status: ${finalStatus}. Time: ${res.time}ms. Details: ${res.error_log || 'Output does not match expected answer.'}`));
-                    }
-
-                    return { ...t, output: res.output, status: finalStatus, time: res.time };
-                  }));
-                  addLog(`Single testcase finished.`);
-                }
-              } catch (e) {
-                console.error("JSON parse error:", e, line);
-              }
-            }
-          }
-        } finally {
-          // Đưa về idle khi hoàn thành stream
-          setRunStatus('idle');
-        }
-      },
-      onError: (error: any) => {
-        addLog(formatLogMessage(`Error running testcase: ${error.message}`));
-        setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'RE', output: `Client/Network Error: ${error.message}` } : t));
-        setRunStatus('idle'); // Set idle nếu có lỗi mạng
-      }
-    });
-  };
-
-  const handleRun = async () => {
-    if (isFileLoading) {
-      addLog(formatLogMessage('⏳ Vui lòng chờ testcases tải xong trước khi chạy...'));
-      return;
-    }
-    const codeToRun = editorRef.current?.getValue();
-    if (!activeFile || codeToRun === undefined) {
-      addLog(formatLogMessage('Lỗi: Không có file hoặc nội dung code để chạy.'));
-      return;
-    }
-
-    // 1. Reset UI state immediately to 'pending' to stop flickering and show user action is in progress.
-    // The UI now shows a clean state, waiting for results.
-    setTestcases(prev => prev.map(tc => ({ ...tc, status: 'pending', output: '', time: -1 })));
-    setCurrentTestIndex(0);
-    const isPython = (settings as any).compiler.toLowerCase().includes('python'); // Check compiler from current settings
-    setRunStatus(isPython ? 'running' : 'compiling');
-    addLog(formatLogMessage(`Starting execution... (Syncing data with server)`));
-
-    // 2. Call the run mutation. The backend will handle saving first, then running.
-    // The payload includes everything the backend needs to establish the "source of truth".
-    setIsDataDirty(false); // Clear dirty flag since backend takes care of saving
-    runCodeMutation.mutate({
-          path: activeFileId,
-          code: codeToRun,
-          testcases: testcases, // Send the full current state of testcases to be saved
-          settings: settings,
-          globalConfig: globalConfig,
-    }, {
-      onSuccess: async (response) => {
-        // The streaming logic here updates the UI as results come in.
-        // The key is that the backend is now running on guaranteed-to-be-saved data.
-        try {
-          if (!response.body) return;
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          
-          let buffer = ''; 
-          let completedTests = 0;
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try {
-                const data = JSON.parse(line);
-
-                if (data.type === 'compile_finish') {
-                  setRunStatus('running');
-                  if (data.log) {
-                    addLog(formatLogMessage(`Compiler Log:\n${data.log}`));
-                    // If compile error, backend sends CE for all. UI should reflect this.
-                    if (data.log.trim() !== '') {
-                        setTestcases(prev => prev.map(tc => ({...tc, status: 'CE'})));
-                    }
-                  }
-                } else if (data.type === 'test_result') {
-                  const res = data.result;
-                  setTestcases(prev => prev.map(tc => {
-                    if (tc.id !== res.id) return tc;
-                    if (res.status !== 'AC') {
-                      const tcIndex = prev.findIndex(t => t.id === res.id);
-                      addLog(formatLogMessage(`> Testcase #${tcIndex + 1} FAILED. Status: ${res.status}. Time: ${res.time}ms. Details: ${res.error_log || 'Output does not match expected answer.'}`));
-                    }
-                    return { ...tc, output: res.output, status: res.status, time: res.time };
-                  }));
-
-                  completedTests++;
-                  setCurrentTestIndex(completedTests);
-                } else if (data.type === 'results_saved') {
-                  addLog(formatLogMessage('All results saved on server. State synchronized.'));
-                  // This is still good for a final sync, ensuring UI matches the final DB state.
-                  queryClient.invalidateQueries({ queryKey: ['fileData', data.path] });
-                } else if (data.type === 'log') {
-                  addLog(formatLogMessage(data.log));
-                } else if (data.type === 'run_aborted') {
-                  // Handle the new error case from server.py
-                  setRunStatus('idle');
-                  setTestcases(prev => prev.map(tc => ({...tc, status: 'RE', output: 'Execution aborted due to server-side save error.'})));
-                }
-              } catch (e) {
-                console.error("JSON Parse error:", e, line);
-              }
-            }
-          }
-          addLog(formatLogMessage('Execution finished.'));
-        } finally {
-          setRunStatus('idle');
-          // Fallback: Check for any testcases that didn't get a result and mark them as errored.
-          setTestcases(prev => prev.map(tc => 
-            tc.status === 'running' || tc.status === 'pending'
-              ? { ...tc, status: 'RE', output: (tc.output || '') + "\nError: The execution result was not received from the backend." } 
-              : tc
-          ));
-        }
-      },
-      onError: (error: any) => {
-        addLog(formatLogMessage(`Error: ${error.message}`));
-        setRunStatus('idle');
-        setTestcases(prev => prev.map(tc => 
-          tc.status === 'running' || tc.status === 'pending' ? { ...tc, status: 'RE', output: `Client/Network Error: ${error.message}` } : tc
-        ));
-      }
-    });
-  };
-
-  const handleFolderSelect = async () => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/testcases/import-dialog`, { method: 'POST' });
-      const data = await res.json();
-      if (data.status === 'ok' && data.testcases && data.testcases.length > 0) {
-        const loadedTestcases: TestCase[] = data.testcases.map((tc: any) => ({
-          id: crypto.randomUUID(),
-          name: tc.name,
-          input: tc.input,
-          answer: tc.answer,
-          output: '',
-          status: 'pending',
-          time: -1 
-        } as TestCase));
-        setTestcases(loadedTestcases);
-        addLog(formatLogMessage(`Loaded ${loadedTestcases.length} testcases from folder.`));
-      }
-    } catch (err: any) {
-      addLog(formatLogMessage(`Error importing testcases: ${err.message}`));
-    }
-  };
-
-  const handleFileSelect = (type: 'brute' | 'ac' | 'gen') => {
-    setCurrentSelecting(type);
-    fileInputRef.current?.click();
-  };
-
-  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      const fileState = {
-        name: file.name,
-        content,
-        language: 'cpp'
-      };
-
-      if (currentSelecting === 'brute') setBruteFile(fileState);
-      else if (currentSelecting === 'ac') setAcFile(fileState);
-      else if (currentSelecting === 'gen') setGenFile(fileState);
-      
-      addLog(formatLogMessage(`Loaded ${file.name} as ${currentSelecting} code.`));
-    };
-    reader.readAsText(file);
-    e.target.value = ''; 
-  };
-
-  const startStressTest = async () => {
-    if (!bruteFile || !acFile || !genFile) {
-      addLog(`Error: Please select all 3 files for stress testing.`);
-      return;
-    }
-    addLog(formatLogMessage(`Starting stress test...`));
-    setIsStressing(true);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/stress-test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          brute_code: bruteFile.content,
-          ac_code: acFile.content,
-          gen_code: genFile.content,
-          settings: settings,
-        }),
-      });
-      const result = await response.json(); 
-      addLog(formatLogMessage(`Stress Test Result: ${result.message}`));
-    } catch (error: any) {
-      addLog(formatLogMessage(`Stress test failed: ${error.message}`));
-    } finally {
-      setIsStressing(false);
-    }
-  };
+  const handleOpenView = useCallback((tcData: TestCase) => { 
+    setViewTcData(tcData); setIsViewTcOpen(true); 
+  }, []);
 
   const toggleTerminal = () => {
     if (isTerminalOpen) {
@@ -607,152 +392,104 @@ export default function App() {
     });
   };
 
-  const handleFileClick = async (node: FileNode) => {
+  const handleFileClick = useCallback(async (node: FileNode) => {
     if (node.type === 'file') {
       openFile(node.id);
     } else { 
       // Logic to toggle folder in tree view state would go here if needed
       // For now, react-complex-tree handles its internal open/close state
     }
-  };
-
-  const isLoadingDataRef = useRef(false);
-  const loadedFileIdRef = useRef<string | null>(null);
+  }, [openFile]);
 
   useEffect(() => {
-    // Đồng bộ state hiện tại vào sessionCache liên tục để giữ RAM luôn fresh
-    if (activeFileId && activeFileId === loadedFileIdRef.current && !isLoadingDataRef.current) {
-      sessionCache.current[activeFileId] = {
-        content: editorContent,
-        settings,
-        testcases
-      };
-    }
-  }, [editorContent, settings, testcases, activeFileId]);
+    let isActive = true;
 
-  useEffect(() => {
-    // 1. Xử lý trường hợp không có file nào được chọn: reset về trạng thái mặc định.
     if (!activeFileId) {
-      setEditorContent('');
-      setTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1 } as TestCase]);
-      loadedFileIdRef.current = null;
+      setTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 } as any]);
       return;
     }
 
-    // --- CƠ CHẾ LOAD TRONG RAM (INSTANT LOAD) ---
-    // Nếu file đã từng mở trong phiên làm việc, lấy ngay từ cache mà không cần đợi API
-    if (sessionCache.current[activeFileId]) {
-      const cached = sessionCache.current[activeFileId];
-      isLoadingDataRef.current = true;
-      setEditorContent(cached.content);
-      setSettings(cached.settings);
-      setTestcases(cached.testcases);
-      loadedFileIdRef.current = activeFileId;
-      setTimeout(() => { isLoadingDataRef.current = false; }, 50);
-      return;
-    }
-
-    // 2. Khi đang tải file mới từ backend, reset testcases để tránh hiển thị dữ liệu cũ.
-    if (isFileLoading) {
-      addLog(formatLogMessage(`Loading data for ${activeFileId}...`));
+    const currentCache = useDataStore.getState().fileCache[activeFileId];
+    if (currentCache) {
+      // Khôi phục Monaco Model nếu chưa có trong RAM
+      if (!useAppStore.getState().monacoModels[activeFileId]) {
+        const model = monaco.editor.createModel(currentCache.content, getLanguage(activeFileId), monaco.Uri.file(activeFileId));
+        addMonacoModel(activeFileId, model);
+      }
+      return; // CỰC KỲ QUAN TRỌNG: Dừng hàm tại đây, không chạy xuống lệnh setIsFileLoading(true)
+    } else {
       setTestcases([]);
-      loadedFileIdRef.current = null;
-      return;
     }
 
-    // 3. Khi đã tải xong (isFileLoading là false), cập nhật state từ fileData.
-    addLog(formatLogMessage(`Data for ${activeFileId} loaded. Populating UI.`));
-    isLoadingDataRef.current = true; // Chặn auto-save ngay sau khi load
-    setIsDataDirty(false); // Đặt cờ dirty về false vì vừa load từ DB lên
-
-    const newContent = fileData?.content || '';
-    setEditorContent(newContent);
-
-    let newSettings;
-    if (fileData?.settings) { // Ensure the loaded settings match the expected type
-      if (isPythonFile) {
-        newSettings = fileData.settings as PythonSettings;
-      } else {
-        newSettings = fileData.settings as CppSettings;
+    setIsFileLoading(true);
+    loadFileData(activeFileId, activeFileId.toLowerCase().endsWith('.py')).then(cache => {
+      if (!isActive) return; // Tránh ghi đè state nếu user đã chuyển tab khác trong lúc đang tải
+      if (cache) {
+        isSettingFromLoad.current = true;
+        setSettings(cache.settings);
+        setTestcases(cache.testcases);
+        
+        if (!useAppStore.getState().monacoModels[activeFileId]) {
+          const model = monaco.editor.createModel(cache.content, getLanguage(activeFileId), monaco.Uri.file(activeFileId));
+          addMonacoModel(activeFileId, model);
+        }
+        
+        setIsDataDirty(false);
+        setTimeout(() => { isSettingFromLoad.current = false; }, 50);
       }
-    } else {
-      // If no settings are found, initialize with defaults based on file type
-      if (isPythonFile) {
-        newSettings = {
-          compiler: 'python', timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '',
-        } as PythonSettings;
-      } else {
-        newSettings = {
-          compiler: 'g++', optimization: 'O2', warnings: true, extraWarnings: true, std: 'c++14',
-          timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '',
-        } as CppSettings;
-      }
+      setIsFileLoading(false);
+    });
+
+    return () => { isActive = false; };
+  }, [activeFileId, loadFileData, addMonacoModel]);
+
+  // Tự động focus lại vào Editor mỗi khi chuyển đổi Tab
+  useEffect(() => {
+    if (activeFileId) {
+      setTimeout(() => {
+        if (editorRef.current && typeof (editorRef.current as any).focus === 'function') {
+          (editorRef.current as any).focus();
+        }
+      }, 100);
     }
-    setSettings(newSettings);
-    
-    let newTestcases;
-    if (fileData?.testcases && fileData.testcases.length > 0) { // Dùng spread (...) để đảm bảo tất cả các trường đã lưu (status, output, time) được giữ lại.
-      newTestcases = fileData.testcases;
-    } else {
-      // Nếu không có testcase nào, reset về trạng thái mặc định.
-      newTestcases = [{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1 } as TestCase];
-    }
-    setTestcases(newTestcases);
-
-    // Khởi tạo RAM Cache cho file này
-    sessionCache.current[activeFileId] = {
-      content: newContent,
-      settings: newSettings,
-      testcases: newTestcases
-    };
-
-    loadedFileIdRef.current = activeFileId;
-    // Tắt cờ khóa sau một khoảng trễ để cho phép auto-save hoạt động lại.
-    setTimeout(() => { isLoadingDataRef.current = false; }, 500);
-
-  }, [activeFileId, fileData, isFileLoading, isPythonFile]);
+  }, [activeFileId]);
 
   // Cập nhật cờ dirty khi có thay đổi từ người dùng
   useEffect(() => {
-    if (fileData && !isLoadingDataRef.current) { 
-      setIsDataDirty(true);
-    }
-  }, [settings, testcases, fileData]);
+    // NGĂN CHẶN GHI ĐÈ: Không bao giờ bật cờ Save nếu Code đang chạy, bảo vệ trạng thái AC/WA trên Database.
+    if (isSettingFromLoad.current || !activeFileId || runStatus !== 'idle') return;
+    setIsDataDirty(true);
+    updateFileCache(activeFileId, { settings, testcases });
+  }, [settings, testcases, activeFileId, updateFileCache, runStatus]);
 
   const closeTab = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     closeFile(id);
+    removeMonacoModel(id);
   };
 
 
-  const handleEditorChange = (value: string | undefined) => {
-    const newContent = value || '';
-    setEditorContent(newContent);
-    addUnsaved(activeFileId);
+  const handleEditorChange = () => {
+    if (activeFileId && !unsavedFileIds.has(activeFileId)) {
+      addUnsaved(activeFileId);
+    }
   };
 
   const insertSnippet = (content: string) => {
     if (editorRef.current) {
-      const editor = editorRef.current;
-      const selection = editor.getSelection();
-      const op = {
-        range: selection,
-        text: content,
-        forceMoveMarkers: true
-      };
-      editor.executeEdits("snippet-insert", [op]);
-      editor.focus();
+      editorRef.current.insertSnippet(content);
     }
   };
 
-  const handleFileDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+  const handleFileDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
       const content = await file.text();
-      const fileId = `temp-drop/${file.name}`;
+      const fileId = `temp-drop-${Date.now()}-${file.name}`;
+      addMonacoModel(fileId, monaco.editor.createModel(content, getLanguage(file.name), monaco.Uri.file(fileId)));
       const newNode: FileNode = { id: fileId, name: file.name, type: 'file', content: content };
 
       openFile(fileId);
@@ -760,150 +497,7 @@ export default function App() {
       addLog(formatLogMessage(`Opened ${file.name} from drag-and-drop.`));
       e.dataTransfer.clearData();
     }
-  }
-
-  const getLanguage = (filename: string) => {
-    if (filename.endsWith('.py')) return 'python';
-    if (filename.endsWith('.cpp')) return 'cpp';
-  };
-
-  const handleCreateItem = async (type: 'file' | 'folder', targetParentPath?: string) => {
-    const name = prompt(`Nhập tên ${type === 'file' ? 'tập tin' : 'thư mục'} mới:`);
-    if (!name) return;
-
-    let parentPath = targetParentPath || 'workspace';
-    if (!targetParentPath && activeFileId && !activeFileId.startsWith('temp')) {
-      const parts = activeFileId.split('/');
-      if (parts.length > 1) {
-        parts.pop();
-        parentPath = parts.join('/');
-      }
-    }
-
-    createItemMutation.mutate({ parent_path: parentPath, name: name, type: type }, {
-      onSuccess: () => addLog(formatLogMessage(`Đã tạo ${type}: ${name}`)),
-      onError: (err: any) => addLog(formatLogMessage(`Lỗi khi tạo: ${err.message}`)),
-    });
-  };
-
-  const handleRenameNode = async (oldPath: string, oldName: string, newName?: string) => {
-    const finalNewName = newName ?? window.prompt('Nhập tên mới:', oldName);
-    if (!finalNewName || finalNewName === oldName) return;
-
-    renameItemMutation.mutate({ old_path: oldPath, new_name: finalNewName }, {
-      onSuccess: (data) => {
-        addLog(formatLogMessage(`Đã đổi tên thành: ${finalNewName}`));
-        const newPath = data.new_path;
-
-        const newOpenFileIds = openFileIds.map(id => id === oldPath ? newPath : id);
-        setOpenFileIds(newOpenFileIds);
-        if (activeFileId === oldPath) {
-          setActiveFileId(newPath);
-        }
-      },
-      onError: (err: any) => addLog(formatLogMessage(`Lỗi khi đổi tên: ${err.message}`)),
-    });
-  };
-
-  const handleDeleteNode = async () => {
-    if (!contextMenu.node) return;
-    if (!window.confirm(`Bạn có chắc muốn xóa vĩnh viễn ${contextMenu.node.type === 'folder' ? 'thư mục' : 'file'} "${contextMenu.node.name}"?`)) return;
-
-    deleteItemMutation.mutate(contextMenu.node.id, {
-      onSuccess: () => {
-        addLog(formatLogMessage(`Đã xóa: ${contextMenu.node!.name}`));
-        const newOpenFileIds = openFileIds.filter(id => !id.startsWith(contextMenu.node!.id));
-        setOpenFileIds(newOpenFileIds);
-        if (activeFileId.startsWith(contextMenu.node!.id)) {
-          setActiveFileId(newOpenFileIds.length > 0 ? newOpenFileIds[newOpenFileIds.length - 1] : '');
-        }
-      },
-      onError: (err: any) => addLog(formatLogMessage(`Lỗi khi xóa: ${err.message}`)),
-    });
-  };
-  const renderVscodeItem = ({ item, depth, children, title, context, arrow }: {
-    item: TreeItem<any>;
-    depth: number;
-    children: React.ReactNode;
-    title: React.ReactNode;
-    context: TreeItemRenderContext<any>;
-    arrow: React.ReactNode;
-  }) => {
-    const isActive = context.isSelected || context.isFocused;
-    return (
-      <li
-        {...context.itemContainerWithChildrenProps}
-        className={cn("rct-item-li flex flex-col items-start text-xs list-none")}
-      >
-        <div
-          {...context.interactiveElementProps}
-          className={cn(
-            "flex items-center w-full gap-1.5 py-1 pr-1 relative select-none cursor-pointer",
-            isActive ? "bg-[#37373d] text-gray-100" : "text-gray-400 hover:bg-[#2a2d2e]"
-          )}
-          style={{ paddingLeft: `${depth * 12 + 4}px` }}
-          onClick={(e) => {
-            if (context.interactiveElementProps.onClick) {
-              context.interactiveElementProps.onClick(e);
-            }
-            handleFileClick({ id: item.index as string, name: item.data, type: item.isFolder ? 'folder' : 'file' });
-          }}
-          onContextMenu={(e) => {
-            if (context.interactiveElementProps.onContextMenu) {
-               context.interactiveElementProps.onContextMenu(e);
-            }
-            const node: FileNode = {
-              id: item.index as string, 
-              name: item.data, 
-              type: item.isFolder ? 'folder' : 'file',
-            };
-            showContextMenu(e.pageX, e.pageY, node);
-          }}
-        >
-          {arrow}
-          {item.isFolder ? (
-            <Folder size={14} className="text-blue-400" />
-          ) : (
-            <File size={14} className={cn(isActive ? "text-blue-400" : "text-gray-500")} />
-          )}
-          <span className="truncate flex-1">{title}</span>
-        </div>
-        {children}
-      </li>
-    );
-  };
-
-  const treeDataProvider = React.useMemo(() => {
-    function convertFileNodesToTreeData(nodes: FileNode[]): Record<TreeItemIndex, TreeItem> {
-      const data: Record<TreeItemIndex, TreeItem> = {
-        root: {
-          index: 'root',
-          isFolder: true,
-          children: nodes.map(node => node.id),
-          data: 'Workspace'
-        }
-      };
-
-      function traverse(nodes: FileNode[]) {
-        for (const node of nodes) {
-          data[node.id] = {
-            index: node.id,
-            isFolder: node.type === 'folder',
-            children: node.children ? node.children.map(child => child.id) : [],
-            data: node.name,
-          };
-          if (node.children) {
-            traverse(node.children);
-          }
-        }
-      }
-      traverse(nodes);
-      return data;
-    }
-    
-    const newTreeData = convertFileNodesToTreeData(fileTree);
-    return new StaticTreeDataProvider(newTreeData, (item, data) => ({ ...item, data }));
-  }, [fileTree]);
+  }, [addMonacoModel, openFile, addLog, formatLogMessage]);
 
   return (
     <div className="flex flex-col h-screen bg-[#1e1e1e] text-white overflow-hidden font-sans" onContextMenu={(e) => e.preventDefault()}>
@@ -935,7 +529,7 @@ export default function App() {
             disabled={runStatus !== 'idle'}
             className={cn(
               "flex items-center gap-2 px-4 py-1.5 rounded text-sm font-medium transition-all active:scale-95 min-w-[120px] justify-center",
-              runStatus === 'idle' ? "bg-green-600 hover:bg-green-700" : "bg-blue-600/50 cursor-not-allowed"
+              runStatus === 'idle' ? "bg-green-600 hover:bg-green-700 text-white" : "bg-blue-600/50 cursor-not-allowed text-gray-300"
             )}
           >
             {runStatus === 'idle' ? (
@@ -966,6 +560,16 @@ export default function App() {
 
           <div className="w-px h-6 bg-[#333] mx-1" />
 
+          <button 
+            onClick={() => rightPanelRef.current?.isCollapsed() ? rightPanelRef.current?.expand() : rightPanelRef.current?.collapse()}
+            className={cn(
+              "p-2 rounded transition-colors hover:bg-[#333]",
+              isRightPanelOpen ? "text-blue-400 bg-[#333]" : "text-gray-400"
+            )}
+            title="Toggle Testcases Panel"
+          >
+            <FlaskConical size={20} />
+          </button>
           <button 
             onClick={() => treePanelRef.current?.isCollapsed() ? treePanelRef.current?.expand() : treePanelRef.current?.collapse()}
             className={cn(
@@ -1004,7 +608,7 @@ export default function App() {
               >
                 <div className="h-full flex flex-col bg-[#252526] border-r border-[#333] overflow-hidden">
                   <div className="flex items-center justify-between pl-3 pr-2 py-2 border-b border-[#333] bg-[#1e1e1e] shrink-0">
-                    <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Explorer</div>
+                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Explorer</div>
                     <div className="flex items-center gap-1">
                       <button 
                         onClick={handleOpenWorkspace} 
@@ -1029,7 +633,7 @@ export default function App() {
                         <Folder size={14} />
                       </button>
                       <button 
-                        onClick={refreshTree} 
+                        onClick={() => fetchFileTree()} 
                         className="p-1 rounded hover:bg-[#333] text-gray-400 hover:text-blue-400 transition-colors" 
                         title="Refresh Tree"
                       >
@@ -1044,27 +648,14 @@ export default function App() {
                         Loading...
                       </div>
                     ) : fileTree.length > 0 ? (
-                      <UncontrolledTreeEnvironment
-                        canDragAndDrop={false}
-                        canDropOnFolder={false}
-                        canReorderItems={false}
-                        dataProvider={treeDataProvider}
-                        getItemTitle={item => item.data}
-                        viewState={treeViewState}
-                        onExpandItem={item => {}}
-                        onCollapseItem={item => {}}
-                        onRenameItem={async (item, newName) => {
-                          await handleRenameNode(item.index as string, item.data, newName);
-                        }}
-                        renderItem={renderVscodeItem}
-                        renderTreeContainer={({ children, ...props }) => (
-                          <ul {...props} className="rct-tree-root w-full h-full !bg-transparent">
-                            {children}
-                          </ul>
-                        )}
-                      >
-                        <Tree treeId="tree-1" rootItem="root" treeLabel="File Explorer" />
-                      </UncontrolledTreeEnvironment>
+                  <FileExplorer
+                    fileTree={fileTree}
+                    activeFileId={activeFileId}
+                    isLoading={isFileTreeLoading}
+                    onFileClick={handleFileClick}
+                    onContextMenu={showContextMenu}
+                    onRenameNode={handleRenameNode}
+                  />
                     ) : <div className="text-center text-xs text-gray-600 p-4">Workspace is empty.</div>}
                   </div>
                 </div>
@@ -1079,54 +670,17 @@ export default function App() {
 
               <Panel defaultSize={55} minSize={20}>
                 <div className="h-full flex flex-col bg-[#1e1e1e] overflow-hidden">
-                  <div className="flex bg-[#252526] overflow-x-auto scrollbar-none border-b border-[#333] shrink-0">
-                    {openFileIds.map(id => {
-                      const file = findFileById(id, fileTree);
-                      const isUnsaved = unsavedFileIds.has(id);
-                      if (!file) return null;
-                      return (
-                        <div 
-                          key={id}
-                          draggable
-                          onDragStart={() => setDraggedTabId(id)}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            if (!draggedTabId || draggedTabId === id) return;
-                            
-                            const newIds = [...openFileIds];
-                            const dragIndex = newIds.indexOf(draggedTabId);
-                            const dropIndex = newIds.indexOf(id);
-                            
-                            newIds.splice(dragIndex, 1);
-                            newIds.splice(dropIndex, 0, draggedTabId);
-
-                            setOpenFileIds(newIds);
-                            setDraggedTabId(null);
-                          }}
-                          onClick={() => setActiveFileId(id)}
-                          className={cn(
-                            "flex items-center gap-2 px-3 py-2 text-xs cursor-pointer border-r border-[#333] min-w-[120px] max-w-[200px] transition-colors group",
-                            activeFileId === id ? "bg-[#1e1e1e] text-blue-400" : "text-gray-500 hover:bg-[#2a2d2e] hover:text-gray-300",
-                            draggedTabId === id ? "opacity-50" : ""
-                          )}
-                        >
-                          <File size={14} className={cn(activeFileId === id ? "text-blue-400" : "text-gray-500")} />
-                          <span className="truncate flex-1">{file.name}</span>
-                          <button
-                            onClick={(e) => closeTab(e, id)}
-                            className="p-0.5 rounded hover:bg-[#333]/70 transition-all text-gray-500 hover:text-gray-200"
-                            aria-label={`Close ${file.name}`}
-                          >
-                            {isUnsaved ? (
-                              <div className="w-3 h-3 flex items-center justify-center group-hover:hidden"><div className="w-1.5 h-1.5 rounded-full bg-current" /></div>
-                            ) : null}
-                            <X size={12} className={cn("transition-opacity", isUnsaved ? "hidden group-hover:block" : "opacity-0 group-hover:opacity-100")} />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <FileTabs 
+                    openFileIds={openFileIds}
+                    activeFileId={activeFileId}
+                    unsavedFileIds={unsavedFileIds}
+                    handleTabSwitch={handleTabSwitch}
+                    closeTab={closeTab}
+                    setDraggedTabId={setDraggedTabId}
+                    draggedTabId={draggedTabId}
+                    findFileById={findFileById}
+                    fileTree={fileTree}
+                  />
 
                   <div 
                     className="flex-1 relative min-h-0"
@@ -1143,28 +697,15 @@ export default function App() {
                             Đang tải nội dung file...
                           </div>
                         )}
-                        <Editor
-                          height="100%"
-                          language={getLanguage(activeFileId)}
-                          theme="vs-dark"
-                          path={activeFileId} 
-                          value={editorContent} 
-                          onMount={(editor, monaco) => {
-                            editorRef.current = editor; // Giữ lại ref đến editor instance
-                          }}
-                          onChange={handleEditorChange}
-                          options={{
-                            minimap: { enabled: false },
-                            fontSize: globalConfig?.editorFontSize,
-                            padding: { top: 16 },
-                            scrollBeyondLastLine: false,
-                            automaticLayout: true,
-                            fontFamily: globalConfig?.editorFontFamily,
-                            cursorSmoothCaretAnimation: 'on',
-                            cursorBlinking: 'smooth',
-                            smoothScrolling: true,
-                          }}
-                        />
+                {monacoModels[activeFileId] && (
+                  <MonacoEditor
+                    ref={editorRef}
+                    activeFileId={activeFileId}
+                    onContentChange={handleEditorChange}
+                    onSave={saveActiveFile}
+                    globalConfig={globalConfig}
+                  />
+                )}
                       </>
                     ) : (
                       <div className="h-full flex items-center justify-center text-gray-600 italic text-sm">
@@ -1182,7 +723,14 @@ export default function App() {
                 </div>
               </PanelResizeHandle>
 
-              <Panel defaultSize={30} minSize={20}>
+              <Panel 
+                ref={rightPanelRef}
+                defaultSize={30} 
+                minSize={20}
+                collapsible={true}
+                onCollapse={() => setIsRightPanelOpen(false)}
+                onExpand={() => setIsRightPanelOpen(true)}
+              >
                 <div className="h-full flex flex-col bg-[#252526] overflow-hidden border-l border-[#333]">
                   <div className="flex border-b border-[#333] bg-[#1e1e1e]">
                     <button 
@@ -1205,99 +753,23 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="flex-1 overflow-y-auto">
-                    {activeTab === 'testcases' ? (
-                      <div className="p-4 space-y-6">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 text-gray-400 text-xs font-bold uppercase tracking-wider">
-                            <FlaskConical size={14} />
-                            Manage Testcases
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button 
-                              onClick={handleFolderSelect}
-                              className="p-1.5 rounded hover:bg-[#333] text-gray-400 hover:text-blue-400 transition-colors"
-                              title="Load from folder"
-                            >
-                              <FolderOpen size={16} />
-                            </button>
-                            <button 
-                              onClick={addTestCase}
-                              className="p-1.5 rounded hover:bg-[#333] text-gray-400 hover:text-green-400 transition-colors"
-                              title="Add testcase"
-                            >
-                              <Plus size={16} />
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="space-y-8">
-                          {testcases.map((tc, index) => (
-                            <TestCaseItem
-                              key={tc.id}
-                              tc={tc}
-                              index={index}
-                              onUpdate={updateTestCase}
-                              onRemove={removeTestCase}
-                              onRun={runSingleTestCase}
-                              runStatus={runStatus}
-                              onOpenDiff={(expected, actual) => {
-                                setDiffExpected(expected);
-                                setDiffActual(actual);
-                                setIsDiffOpen(true);
-                              }}
-                              isDiffSupported={isDiffSupported}
-                          onOpenView={(tcData) => {
-                            setViewTcData(tcData);
-                            setIsViewTcOpen(true);
-                          }}
-                            />
-                          ))}
-                        </div>
-                        
-                        <button 
-                          onClick={addTestCase}
-                          className="w-full py-3 border-2 border-dashed border-[#3c3c3c] rounded-lg text-gray-500 hover:text-gray-300 hover:border-[#555] transition-all flex items-center justify-center gap-2 text-sm font-medium"
-                        >
-                          <Plus size={16} />
-                          Add New Testcase
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="p-4 flex flex-col h-full">
-                        <div className="flex items-center gap-2 mb-4 text-gray-400 text-xs font-bold uppercase tracking-wider">
-                          <FlaskConical size={14} />
-                          Stress Test Configuration
-                        </div>
-
-                        <div className="space-y-4">
-                          <FileSelector 
-                            label="Code Trâu (Brute)" 
-                            file={bruteFile} 
-                            onSelect={() => handleFileSelect('brute')} 
-                          />
-                          <FileSelector 
-                            label="Code AC (Target)" 
-                            file={acFile} 
-                            onSelect={() => handleFileSelect('ac')} 
-                          />
-                          <FileSelector 
-                            label="Random Test Gen" 
-                            file={genFile} 
-                            onSelect={() => handleFileSelect('gen')} 
-                          />
-
-                          <button 
-                            onClick={startStressTest}
-                            disabled={!bruteFile || !acFile || !genFile || isStressing}
-                            className="w-full mt-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 active:scale-95"
-                          >
-                            <FlaskConical size={16} />
-                            {isStressing ? 'Stress Testing...' : 'Start Stress Test'}
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                  <div className="flex-1 overflow-hidden">
+                    <div className={cn("h-full", activeTab === 'testcases' ? 'block' : 'hidden')}>
+                      <TestcaseManager
+                        testcases={testcases}
+                        setTestcases={setTestcases}
+                        runStatus={runStatus}
+                        runSingleTestCase={runSingleTestCase}
+                        onOpenDiff={handleOpenDiff}
+                        onOpenView={handleOpenView}
+                        addLog={addLog}
+                        formatLogMessage={formatLogMessage}
+                        isDiffSupported={isDiffSupported}
+                      />
+                    </div>
+                    <div className={cn("h-full overflow-y-auto", activeTab === 'stress' ? 'block' : 'hidden')}>
+                      <StressTest />
+                    </div>
                   </div>
                 </div>
               </Panel>
@@ -1337,7 +809,7 @@ export default function App() {
           isOpen={isGlobalSettingsOpen}
           onClose={() => setIsGlobalSettingsOpen(false)}
           globalSettings={globalConfig}
-          onSave={(newConfig) => saveGlobalConfigMutation.mutate(newConfig)}
+          onSave={(newConfig) => saveGlobalConfig(newConfig)}
         />
       )}
 
@@ -1351,7 +823,7 @@ export default function App() {
       <TestCaseViewerModal
         isOpen={isViewTcOpen}
         onClose={() => setIsViewTcOpen(false)}
-        tc={testcases.find(t => t.id === viewTcData?.id) || null}
+        tc={viewTcData ? (testcases.find(t => t.id === viewTcData.id) || null) : null}
         onUpdate={updateTestCase}
       />
 
@@ -1359,7 +831,7 @@ export default function App() {
         isOpen={isSnippetManagerOpen}
         onClose={() => setIsSnippetManagerOpen(false)}
         snippets={globalConfig?.snippets || []}
-        onUpdate={(newSnippets) => saveGlobalConfigMutation.mutate({ ...globalConfig, snippets: newSnippets } as GlobalConfig)}
+        onUpdate={(newSnippets) => saveGlobalConfig({ ...globalConfig, snippets: newSnippets } as GlobalConfig)}
       />
 
       <SnippetMenu
@@ -1367,14 +839,6 @@ export default function App() {
         onClose={() => setIsSnippetMenuOpen(false)}
         snippets={globalConfig?.snippets || []}
         onSelect={insertSnippet}
-      />
-
-      <input
-        type="file"
-        ref={fileInputRef}
-        className="hidden"
-        onChange={onFileChange}
-        accept=".cpp,.c,.py,.java,.txt"
       />
 
       {contextMenu.visible && contextMenu.node && (
@@ -1418,26 +882,3 @@ export default function App() {
     </div>
   );
 }
-
-const FileSelector = ({ label, file, onSelect }: { label: string, file: FileState | null, onSelect: () => void }) => {
-  return (
-    <div className="group">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-gray-500 ml-1">{label}</span>
-        {file && <span className="text-[10px] text-green-500 font-mono">Loaded</span>}
-      </div>
-      <button
-        onClick={onSelect}
-        className={cn(
-          "w-full flex items-center gap-3 px-3 py-2 border rounded text-sm transition-all text-left overflow-hidden",
-          file
-            ? "border-blue-500 bg-blue-500/10 text-blue-100"
-            : "border-[#3c3c3c] bg-[#1e1e1e] text-gray-400 hover:border-gray-500"
-        )}
-      >
-        <Upload size={14} className="shrink-0" />
-        <span className="truncate">{file ? file.name : "Select file..."}</span>
-      </button>
-    </div>
-  );
-};

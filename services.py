@@ -18,14 +18,19 @@ class DotDict(dict):
             return self[item]
         raise AttributeError(item)
 
-def execute_code_stream(path: str, code: str, settings_dict: dict, global_config_dict: Optional[dict] = None, workspace_dir: str = "workspace"):
+def execute_code_stream(path: str, code: str, settings_dict: dict, global_config_dict: Optional[dict] = None, workspace_dir: str = "workspace", target_testcase_id: Optional[str] = None):
     settings = DotDict(settings_dict)
     global_config = DotDict(global_config_dict) if global_config_dict else None
 
     # --- NEW WORKFLOW: Get testcases directly from the database ---
     # The 'testcases' argument is removed. We trust the data that was just saved by the server endpoint.
-    _, testcases = database.get_problem_data(path)
-    if not testcases:
+    current_settings, all_db_testcases = database.get_problem_data(path)
+    testcases_to_run = all_db_testcases
+    
+    if target_testcase_id:
+        testcases_to_run = [tc for tc in all_db_testcases if tc["id"] == target_testcase_id]
+
+    if not testcases_to_run:
         # This case should be rare since the server just saved them, but it's good practice to check.
         yield json.dumps({"type": "log", "log": "Warning: No testcases found in database to run."}) + "\n"
         return
@@ -96,8 +101,16 @@ def execute_code_stream(path: str, code: str, settings_dict: dict, global_config
             yield json.dumps({"type": "compile_finish", "log": proc.stderr}) + "\n"
 
             if proc.returncode != 0:
-                for tc in testcases:
+                for tc in testcases_to_run:
                     yield json.dumps({"type": "test_result", "result": {"id": tc["id"], "status": "CE", "output": "", "error_log": proc.stderr}}) + "\n"
+                # --- LƯU TRẠNG THÁI CE VÀO DATABASE ---
+                if not is_temp_file and path:
+                    for db_tc in all_db_testcases:
+                        if target_testcase_id and db_tc["id"] != target_testcase_id:
+                            continue
+                        db_tc["status"] = "CE"
+                    database.save_problem_data(path, current_settings, all_db_testcases)
+                    yield json.dumps({"type": "results_saved", "path": path}) + "\n"
                 return
             
             cmd = [f"./{os.path.basename(exe_file)}" if os.name != 'nt' else exe_file]
@@ -107,8 +120,6 @@ def execute_code_stream(path: str, code: str, settings_dict: dict, global_config
         out_file = os.path.join(run_workspace, f"{io_base_name}.out")
 
         # 3. VÒNG LẶP CHẠY TỪNG TESTCASE QUA RUNNER.EXE
-        all_results = []
-        
         # --- XỬ LÝ CUSTOM CHECKER ---
         checker_name = settings.get("checker", "Ignore Trailing Space (Default)")
         is_default_checker = checker_name.startswith("Ignore Trailing Space") or checker_name == ""
@@ -138,8 +149,8 @@ def execute_code_stream(path: str, code: str, settings_dict: dict, global_config
                 
         yield json.dumps({"type": "log", "log": f"Using Checker: {checker_exe if not is_default_checker else 'Ignore Trailing Space (Default)'}"}) + "\n"
 
-        for tc in testcases:
-            tc_index = testcases.index(tc) + 1
+        for tc in testcases_to_run:
+            tc_index = testcases_to_run.index(tc) + 1
             yield json.dumps({"type": "log", "log": f"--- Running Testcase #{tc_index} (ID: {tc['id']}) ---"}) + "\n"
             result_to_yield = None
             try:
@@ -202,6 +213,7 @@ def execute_code_stream(path: str, code: str, settings_dict: dict, global_config
                 # Trích xuất dữ liệu
                 runner_status = runner_result.get("status", "RE")
                 exec_time = runner_result.get("time_ms", 0)
+                exec_memory = round(runner_result.get("memory_bytes", 0) / (1024 * 1024), 2) # Giữ 2 chữ số thập phân cho chính xác (VD: 6.45MB)
                 error_msg = runner_result.get("error_msg", "")
                 
                 # Ghép thêm stderr của child process nếu có lỗi
@@ -264,55 +276,45 @@ def execute_code_stream(path: str, code: str, settings_dict: dict, global_config
                             error_msg = "Checker executable not found or failed to compile."
                     
                 result_to_yield = {
-                    "id": tc["id"], "output": out_text, "status": status, "error_log": error_msg, "time": int(exec_time)
+                    "id": tc["id"], "output": out_text, "status": status, "error_log": error_msg, "time": int(exec_time), "memory": exec_memory
                 }
                 
             except subprocess.TimeoutExpired:
                 # Fallback cuối cùng nếu runner.exe bị treo
                 proc.kill()
                 proc.communicate()
-                result_to_yield = {"id": tc["id"], "output": "", "status": "TLE", "error_log": "Time Limit Exceeded (Python Timeout)", "time": settings.timeLimit}
+                result_to_yield = {"id": tc["id"], "output": "", "status": "TLE", "error_log": "Time Limit Exceeded (Python Timeout)", "time": settings.timeLimit, "memory": -1}
             except Exception as e:
-                result_to_yield = {"id": tc["id"], "output": "", "status": "RE", "error_log": f"System Error: {str(e)}", "time": -1}
+                result_to_yield = {"id": tc["id"], "output": "", "status": "RE", "error_log": f"System Error: {str(e)}", "time": -1, "memory": -1}
             
             if result_to_yield:
-                all_results.append(result_to_yield)
                 yield json.dumps({"type": "test_result", "result": result_to_yield}) + "\n"
-
-        # --- LOGIC ĐỂ LƯU KẾT QUẢ VÀO FILE .CPE ---
-        # Sau khi chạy xong tất cả testcase, ta chủ động ghi kết quả vào file .cpe
-        # để đảm bảo dữ liệu được lưu trữ bền bỉ ngay lập tức.
-        if not is_temp_file and all_results and path:
-            try:
-                # Lấy cài đặt hiện tại của file (chỉ cần settings, testcases sẽ được ghi đè)
-                # Lấy toàn bộ dữ liệu testcase hiện có từ DB để giữ lại input/answer gốc
-                current_settings, existing_testcases_from_db = database.get_problem_data(path)
                 
-                # Tạo một map từ ID của các kết quả chạy để dễ dàng cập nhật
-                executed_results_map = {res["id"]: res for res in all_results}
-                
-                # Tạo danh sách testcases cuối cùng để lưu vào DB
-                final_testcases_to_save = []
-                for db_tc in existing_testcases_from_db:
-                    tc_id = db_tc["id"]
-                    if tc_id in executed_results_map:
-                        # Nếu testcase này đã được chạy, cập nhật output, status, time
-                        executed_result = executed_results_map[tc_id]
-                        final_testcases_to_save.append({
-                            **db_tc, # Giữ nguyên input, answer và các trường khác từ DB
-                            "output": executed_result.get("output", ""),
-                            "status": executed_result.get("status", "pending"),
-                            "time": executed_result.get("time", -1)
-                        })
-                    else:
-                        final_testcases_to_save.append(db_tc) # Giữ nguyên testcase nếu không được chạy
+                # --- LƯU KẾT QUẢ NGAY SAU MỖI TESTCASE ---
+                if not is_temp_file and path:
+                    try:
+                        for db_tc in all_db_testcases:
+                            if db_tc["id"] == tc["id"]:
+                                db_tc["output"] = result_to_yield.get("output", "")
+                                db_tc["status"] = result_to_yield.get("status", "pending")
+                                db_tc["time"] = result_to_yield.get("time", -1)
+                                db_tc["memory"] = result_to_yield.get("memory", -1)
+                                break
+         
+                        # Sử dụng UPDATE trực tiếp thay vì ghi đè toàn bộ dữ liệu file
+                        database.update_testcase_result(
+                            path,
+                            tc["id"],
+                            result_to_yield.get("output", ""),
+                            result_to_yield.get("status", "pending"),
+                            result_to_yield.get("time", -1),
+                            result_to_yield.get("memory", -1)
+                        )
+                    except Exception as e:
+                        yield json.dumps({"type": "log", "log": f"Server Error: Could not save results: {str(e)}"}) + "\n"
 
-                # Lưu dữ liệu đã cập nhật vào DB
-                database.save_problem_data(path, current_settings, final_testcases_to_save)
-                yield json.dumps({"type": "results_saved", "path": path}) + "\n"
-            except Exception as e:
-                # Gửi log lỗi về client nếu không lưu được file
-                yield json.dumps({"type": "log", "log": f"Server Error: Could not save results to .cpe file: {str(e)}"}) + "\n"
+        if not is_temp_file and path:
+            yield json.dumps({"type": "results_saved", "path": path}) + "\n"
                 
     finally:
         if is_sandbox and os.path.exists(run_workspace):

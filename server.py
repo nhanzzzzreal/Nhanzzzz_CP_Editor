@@ -10,6 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from models import GlobalConfig, CreateItemReq, RenameItemReq, FileDataSaveReq, FileContentSaveReq, RunAllReq, CppSettings, PythonSettings
 from services import execute_code_stream
 
+import asyncio
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 import threading
 from PIL import Image
 import pystray
@@ -66,6 +69,41 @@ if not any(f != ".cpe" for f in os.listdir(WORKSPACE_DIR)):
     with open(os.path.join(WORKSPACE_DIR, "main.cpp"), "w", encoding="utf-8") as f:
         f.write("#include <iostream>\nusing namespace std;\n\nint main() {\n    int a, b;\n    cin >> a >> b;\n    cout << a + b << endl;\n    return 0;\n}")
 
+# --- WATCHDOG SETUP ---
+file_change_queues = []
+observer = None
+loop = None
+
+class WorkspaceEventHandler(FileSystemEventHandler):
+    def on_any_event(self, event):
+        if hasattr(event, 'src_path'):
+            path = event.src_path.replace("\\", "/")
+            if "/.cpe" in path or "/.git" in path or path.endswith("cpe_global_config.json") or path.endswith("~"):
+                return
+
+            # Bỏ qua các file database của SQLite do hệ thống tự sinh ra (tránh spam sự kiện khi update kết quả)
+            if "cpe_data.db" in path:
+                return
+                
+            # Bỏ qua các file tạm sinh ra trong quá trình biên dịch và chạy
+            if path.endswith((".exe", ".out", ".inp", ".ans", ".o")):
+                return
+
+        global loop
+        if loop and file_change_queues:
+            for q in file_change_queues:
+                loop.call_soon_threadsafe(q.put_nowait, "change")
+
+def setup_watchdog(workspace_path):
+    global observer
+    if observer:
+        observer.stop()
+        observer.join()
+    event_handler = WorkspaceEventHandler()
+    observer = Observer()
+    observer.schedule(event_handler, workspace_path, recursive=True)
+    observer.start()
+
 app = FastAPI()
 
 dist_path = os.path.join(BUNDLE_DIR, "dist")
@@ -77,6 +115,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def startup_event():
+    global loop
+    loop = asyncio.get_running_loop()
+    setup_watchdog(WORKSPACE_DIR)
 
 # --- API QUẢN LÝ FILE ---
 @app.get("/api/app-config")
@@ -114,7 +158,9 @@ def save_app_config(config: GlobalConfig):
         
         # Cập nhật WORKSPACE_DIR trong bộ nhớ server nếu có thay đổi
         if os.path.exists(config.lastWorkspace):
-            WORKSPACE_DIR = config.lastWorkspace
+            if WORKSPACE_DIR != config.lastWorkspace:
+                WORKSPACE_DIR = config.lastWorkspace
+                setup_watchdog(WORKSPACE_DIR)
             
         return {"status": "ok"}
     except Exception as e:
@@ -174,6 +220,11 @@ def build_folder_tree(current_path: str):
         for child in sorted(os.listdir(current_path)):
             if child.startswith('.'): # Bỏ qua .cpe, .git, v.v...
                 continue
+
+            # Ẩn các file cơ sở dữ liệu và file thực thi tạm khỏi cây thư mục giao diện
+            if "cpe_data.db" in child or child.endswith((".exe", ".o")):
+                continue
+
             child_path = os.path.join(current_path, child)
             children.append(build_folder_tree(child_path))
         return {"id": safe_path, "name": name, "type": "folder", "children": children}
@@ -247,6 +298,7 @@ def open_workspace_dialog():
             with open(GLOBAL_CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(config_data, f, indent=4)
                 
+            setup_watchdog(WORKSPACE_DIR)
             return {"status": "ok", "path": WORKSPACE_DIR}
         return {"status": "cancelled"}
     except Exception as e:
@@ -341,6 +393,27 @@ async def get_diff(request: Request):
         "actual_lines": actual_lines
     }
 
+@app.get("/api/files/watch")
+async def watch_files(request: Request):
+    q = asyncio.Queue()
+    file_change_queues.append(q)
+    
+    async def event_generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                await q.get()
+                await asyncio.sleep(0.1) # Debounce consecutive events
+                while not q.empty():
+                    q.get_nowait()
+                yield 'data: {"event": "change"}\n\n'
+        finally:
+            if q in file_change_queues:
+                file_change_queues.remove(q)
+                
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 @app.get("/api/checkers")
 def get_checkers():
     checkers_dir = os.path.join(BASE_DIR, "checkers")
@@ -377,7 +450,16 @@ def get_file_data(path: str):
 
     saved_settings, testcases = database.get_problem_data(path)
     if saved_settings:
-        default_settings_dict.update(saved_settings)
+        saved_compiler = saved_settings.get("compiler", "")
+        is_saved_python = "python" in saved_compiler.lower()
+        
+        # Kiểm tra chống nhiễu loạn cấu hình chéo giữa Python và C++
+        if is_python_file and not is_saved_python:
+            pass # File Python nhưng DB lưu là C++ -> Bỏ qua, dùng default
+        elif is_cpp_file and is_saved_python:
+            pass # File C++ nhưng DB lưu là Python -> Bỏ qua, dùng default
+        else:
+            default_settings_dict.update(saved_settings)
     else:
         # Nếu không có cài đặt nào trong DB, dùng mặc định và khởi tạo DB
         database.save_problem_data(path, default_settings_dict, [])
@@ -426,6 +508,7 @@ async def run_stream(request: Request):
     settings_dict = body.get("settings", {})
     global_config_dict = body.get("globalConfig")
     testcases = body.get("testcases", [])
+    target_testcase_id = body.get("targetTestcaseId")
 
     # --- NEW WORKFLOW: SAVE BEFORE RUN ---
     # This ensures the database is the source of truth before execution starts.
@@ -456,18 +539,11 @@ async def run_stream(request: Request):
             code, 
             settings_dict,
             global_config_dict,
-            workspace_dir=WORKSPACE_DIR
+            workspace_dir=WORKSPACE_DIR,
+            target_testcase_id=target_testcase_id
         ),
         media_type="text/event-stream"
     )
-
-@app.delete("/api/files")
-def delete_item(path: str):
-    try:
-        database.delete_problem_data(path) # Xóa dữ liệu liên quan trong DB
-        # ... (logic xóa file/thư mục vật lý) ...
-    except:
-        print("done")
 
 # Chỉ phục vụ các file tĩnh và index.html nếu KHÔNG ở chế độ phát triển (production build)
 # Ở chế độ phát triển, Vite sẽ phục vụ frontend

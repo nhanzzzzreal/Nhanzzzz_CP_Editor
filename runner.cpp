@@ -12,8 +12,8 @@ struct MY_JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
     IO_COUNTERS IoInfo;
     SIZE_T ProcessMemoryLimit;
     SIZE_T JobMemoryLimit;
-    SIZE_T PeakProcessMemoryLimit;
-    SIZE_T PeakJobMemoryLimit;
+    SIZE_T PeakProcessMemoryUsed;
+    SIZE_T PeakJobMemoryUsed;
 };
 
 struct ExecutionResult {
@@ -100,7 +100,7 @@ int main(int argc, char* argv[]) {
         res.time_ms = wall_time_ms; 
     }
     
-    res.memory_bytes = jeli_final.PeakProcessMemoryLimit;
+    res.memory_bytes = jeli_final.PeakProcessMemoryUsed;
 
     if (wait_res == WAIT_TIMEOUT) {
         TerminateProcess(pi.hProcess, 1);

@@ -14,6 +14,7 @@ export interface TestCase {
   status: TestStatus;
   isExpanded?: boolean;
   time?: number;
+  memory?: number;
 }
 
 // Common settings for both C++ and Python

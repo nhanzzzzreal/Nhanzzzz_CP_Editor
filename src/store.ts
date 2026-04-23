@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { FileNode, GlobalConfig } from './types';
+import * as monaco from 'monaco-editor';
 
 type AppState = {
   // UI State
@@ -22,6 +23,12 @@ type AppState = {
   activeFileId: string;
   unsavedFileIds: Set<string>;
   
+  // Monaco Editor Models State
+  monacoModels: Record<string, {
+    model: monaco.editor.ITextModel;
+    cursorState: monaco.editor.ICodeEditorViewState | null;
+  }>;
+
   // Actions
   // UI Actions
   setTerminalOpen: (isOpen: boolean) => void;
@@ -52,6 +59,10 @@ type AppState = {
   
   // Global Config Hydration
   hydrate: (config: GlobalConfig) => void;
+
+  addMonacoModel: (fileId: string, model: monaco.editor.ITextModel) => void;
+  updateMonacoModelCursor: (fileId: string, cursorState: monaco.editor.ICodeEditorViewState | null) => void;
+  removeMonacoModel: (fileId: string) => void;
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -70,6 +81,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   openFileIds: [],
   activeFileId: '',
   unsavedFileIds: new Set(),
+  monacoModels: {},
 
   // Actions
   setTerminalOpen: (isOpen) => set({ isTerminalOpen: isOpen }),
@@ -125,4 +137,31 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
   },
+
+  addMonacoModel: (fileId, model) => set((state) => ({
+    monacoModels: {
+      ...state.monacoModels,
+      [fileId]: { model, cursorState: null },
+    },
+  })),
+  updateMonacoModelCursor: (fileId, cursorState) => set((state) => {
+    const modelState = state.monacoModels[fileId];
+    if (modelState) {
+      return {
+        monacoModels: {
+          ...state.monacoModels,
+          [fileId]: { ...modelState, cursorState },
+        },
+      };
+    }
+    return state;
+  }),
+  removeMonacoModel: (fileId) => set((state) => {
+    const newModels = { ...state.monacoModels };
+    if (newModels[fileId]) {
+      newModels[fileId].model.dispose(); // Hủy model để giải phóng RAM khi đóng file
+      delete newModels[fileId];
+    }
+    return { monacoModels: newModels };
+  }),
 }));
