@@ -15,6 +15,10 @@ interface DataStore {
   fileTree: FileNode[];
   fileCache: Record<string, FileCacheData>;
   isFileTreeLoading: boolean;
+  activeTestcases: TestCase[];
+  setActiveTestcases: (updater: TestCase[] | ((prev: TestCase[]) => TestCase[])) => void;
+  activeSettings: AppSettings;
+  setActiveSettings: (updater: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
   
   fetchGlobalConfig: () => Promise<void>;
   saveGlobalConfig: (config: GlobalConfig) => Promise<void>;
@@ -36,6 +40,14 @@ export const useDataStore = create<DataStore>((set, get) => ({
   fileTree: [],
   fileCache: {},
   isFileTreeLoading: false,
+  activeTestcases: [{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 }] as any,
+  setActiveTestcases: (updater) => set((state) => ({
+    activeTestcases: typeof updater === 'function' ? updater(state.activeTestcases) : updater
+  })),
+  activeSettings: { compiler: 'g++', optimization: 'O2', warnings: true, extraWarnings: true, std: 'c++14', timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '' } as any,
+  setActiveSettings: (updater) => set((state) => ({
+    activeSettings: typeof updater === 'function' ? updater(state.activeSettings) : updater
+  })),
 
   fetchGlobalConfig: async () => {
     try {

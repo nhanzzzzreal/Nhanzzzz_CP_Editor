@@ -1,17 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import * as monaco from 'monaco-editor';
-import { Play, Terminal as TerminalIcon, FlaskConical, GripVertical, GripHorizontal, FolderOpen, Settings as SettingsIcon, Folder, Loader2, FilePlus, FolderTree, Scissors } from 'lucide-react';
+import { Terminal as TerminalIcon, FlaskConical, GripVertical, GripHorizontal, FolderOpen, Settings as SettingsIcon, Folder, Loader2, FilePlus, FolderTree, Scissors } from 'lucide-react';
 import { PanelGroup, Panel, PanelResizeHandle, ImperativePanelHandle } from 'react-resizable-panels';
 import { useDebouncedCallback } from 'use-debounce';
 
 import { cn } from './lib/utils';
-import { AppSettings, FileNode, FileState, GlobalConfig, TestCase, CppSettings, PythonSettings } from './types';
+import { FileNode, GlobalConfig } from './types';
 import { useAppStore } from './store';
 import { useDataStore } from './dataStore';
 
 // --- Component Imports ---
-import { SettingsModal } from './components/SettingsModal';
-import { TestCaseItem } from './components/TestCaseItem';
+// import { TestCaseItem } from './components/TestCaseItem';
 import { Terminal } from './components/Terminal';
 import { SnippetManagerModal } from './components/SnippetManagerModal';
 import { SnippetMenu } from './components/SnippetMenu';
@@ -19,9 +18,7 @@ import { GlobalSettingsModal } from './components/GlobalSettingsModal';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { DiffViewerModal } from './components/DiffViewerModal';
 import { MonacoEditor, CodeEditorRef } from './components/MonacoEditor';
-import { TestCaseViewerModal } from './components/TestCaseViewerModal';
 import { FileExplorer } from './components/FileExplorer';
-import { useCodeExecution } from './hooks/useCodeExecution';
 import { useTreeOperations } from './hooks/useTreeOperations';
 import { TestcaseManager } from './components/TestcaseManager';
 import { StressTest } from './components/StressTest';
@@ -47,13 +44,10 @@ export default function App() {
     logs, addLog, clearLogs,
     isTerminalOpen, setTerminalOpen,
     isTreeOpen, setTreeOpen,
-    isSettingsOpen, setIsSettingsOpen,
     isGlobalSettingsOpen, setIsGlobalSettingsOpen,
     isSnippetManagerOpen, setIsSnippetManagerOpen,
     isSnippetMenuOpen, setIsSnippetMenuOpen,
     activeTab, setActiveTab,
-    runStatus, setRunStatus,
-    currentTestIndex, setCurrentTestIndex,
     openFileIds, setOpenFileIds,
     activeFileId, setActiveFileId,
     unsavedFileIds, addUnsaved, removeUnsaved,
@@ -73,55 +67,18 @@ export default function App() {
   const [diffExpected, setDiffExpected] = useState('');
   const [diffActual, setDiffActual] = useState('');
   
-  const [isViewTcOpen, setIsViewTcOpen] = useState(false);
-  const [viewTcData, setViewTcData] = useState<TestCase | null>(null);
   const [isDataDirty, setIsDataDirty] = useState(false);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const [isFileLoading, setIsFileLoading] = useState(false);
-  const isSettingFromLoad = useRef(false);
   
-  // Đồng bộ lại testcases từ Database sau khi chạy xong
-  const prevRunStatus = useRef(runStatus);
-  useEffect(() => {
-    if (prevRunStatus.current !== 'idle' && runStatus === 'idle') {
-      if (activeFileId && !activeFileId.startsWith('temp')) {
-        refreshFileData(activeFileId, isPythonFile).then(cache => {
-          if (cache && cache.testcases && cache.testcases.length > 0) {
-            isSettingFromLoad.current = true;
-            setTestcases(cache.testcases);
-            setTimeout(() => { isSettingFromLoad.current = false; }, 50);
-          }
-        });
-      }
-    }
-    prevRunStatus.current = runStatus;
-  }, [runStatus, activeFileId, isPythonFile]);
-
   // Refs
   const editorRef = useRef<CodeEditorRef>(null);
-  const [settings, setSettings] = useState<AppSettings>(
-    { // Default to CppSettings
-    compiler: 'g++',
-    optimization: 'O2',
-    warnings: true,
-    extraWarnings: true,
-    std: 'c++14', // New C++ specific setting
-    timeLimit: 1000,
-    memoryLimit: 256,
-    useSandbox: true,
-    useFileIO: true,
-    customFileName: '',
-  } as CppSettings); // Cast for initial state
 
   useEffect(() => {
     const handleClick = () => hideContextMenu();
     window.addEventListener('click', handleClick);
     return () => window.removeEventListener('click', handleClick);
   }, []);
-
-  const [testcases, setTestcases] = useState<TestCase[]>([
-    { id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 } as any
-  ]);
 
   const terminalPanelRef = useRef<ImperativePanelHandle>(null);
   const treePanelRef = useRef<ImperativePanelHandle>(null);
@@ -133,7 +90,8 @@ export default function App() {
     fetchGlobalConfig, saveGlobalConfig,
     fetchFileTree, loadFileData, refreshFileData,
     updateFileCache, saveFileData, saveFileContent,
-    openWorkspace, openFileDialog
+    openWorkspace, openFileDialog,
+    setActiveTestcases, setActiveSettings
   } = useDataStore();
 
   useEffect(() => {
@@ -179,7 +137,6 @@ export default function App() {
     }
     
     if (state.isDataDirty) {
-        updateFileCache(activeFileId, { settings: state.settings, testcases: state.testcases });
         saveFileData(activeFileId);
       setIsDataDirty(false);
       saved = true;
@@ -210,7 +167,6 @@ export default function App() {
 
     // Lưu trạng thái file hiện tại vào RAM cache trước khi rời đi
     if (activeFileId && editorRef.current) {
-      updateFileCache(activeFileId, { settings: state.settings, testcases: state.testcases });
       if (state.isDataDirty) {
         saveFileData(activeFileId);
       }
@@ -218,18 +174,16 @@ export default function App() {
 
     // BATCH UPDATE: Cập nhật song song state để tránh "Zombie UI" (Chớp giao diện)
     const targetCache = useDataStore.getState().fileCache[id];
-    isSettingFromLoad.current = true;
     setIsDataDirty(false);
     setActiveFileId(id);
     
     if (targetCache) {
-      setSettings(targetCache.settings);
-      setTestcases(targetCache.testcases);
+      setActiveSettings(targetCache.settings);
+      setActiveTestcases(targetCache.testcases);
     } else {
-      setTestcases([]);
+      setActiveTestcases([]);
     }
-    setTimeout(() => { isSettingFromLoad.current = false; }, 50);
-  }, [activeFileId, updateFileCache, saveFileData, setActiveFileId]);
+  }, [activeFileId, saveFileData, setActiveFileId, setActiveSettings, setActiveTestcases]);
 
   const { handleCreateItem, handleRenameNode, handleDeleteNode } = useTreeOperations(formatLogMessage);
 
@@ -245,18 +199,6 @@ export default function App() {
   }, []);
   const activeFile = useMemo(() => findFileById(activeFileId, fileTree), [activeFileId, fileTree, findFileById]);
 
-  const { handleRun, runSingleTestCase } = useCodeExecution({
-    activeFileId,
-    activeFile,
-    editorRef,
-    settings,
-    globalConfig,
-    testcases,
-    setTestcases,
-    isFileLoading,
-    setIsDataDirty,
-    formatLogMessage
-  });
 
   // --- Hotkeys ---
   // Cấu hình để phím tắt hoạt động ngay cả khi đang focus vào editor hoặc input
@@ -299,10 +241,10 @@ export default function App() {
 
   // --- NEW ARCHITECTURE: PERIODIC SYNC TO USB (RAM-first approach) ---
   // Sử dụng ref để đảm bảo setInterval luôn đọc được state mới nhất mà không bị reset timer khi gõ phím
-  const latestStateRef = useRef({ activeFileId, unsavedFileIds, isDataDirty, settings, testcases });
+  const latestStateRef = useRef({ activeFileId, unsavedFileIds, isDataDirty });
   useEffect(() => {
-    latestStateRef.current = { activeFileId, unsavedFileIds, isDataDirty, settings, testcases };
-  }, [activeFileId, unsavedFileIds, isDataDirty, settings, testcases]);
+    latestStateRef.current = { activeFileId, unsavedFileIds, isDataDirty };
+  }, [activeFileId, unsavedFileIds, isDataDirty]);
 
   useEffect(() => {
     const delay = globalConfig?.autoSaveDelay || 10000; // Default: 10s
@@ -317,7 +259,6 @@ export default function App() {
           removeUnsaved(state.activeFileId);
         }
         if (state.isDataDirty) {
-            updateFileCache(state.activeFileId, { settings: state.settings, testcases: state.testcases });
             saveFileData(state.activeFileId);
           setIsDataDirty(false);
         }
@@ -349,18 +290,8 @@ export default function App() {
     }
   }, [openFileIds, activeFileId, debouncedSaveGlobalConfig]);
 
-  // Function to update a single testcase, now defined in App.tsx to be passed to TestCaseViewerModal
-  const updateTestCase = useCallback((id: string, field: keyof TestCase, value: string) => {
-    setTestcases(prev => prev.map(tc => tc.id === id ? { ...tc, [field]: value } : tc));
-    setIsDataDirty(true); // Mark data as dirty when a testcase is updated
-  }, []);
-  
   const handleOpenDiff = useCallback((expected: string, actual: string) => { 
     setDiffExpected(expected); setDiffActual(actual); setIsDiffOpen(true); 
-  }, []);
-
-  const handleOpenView = useCallback((tcData: TestCase) => { 
-    setViewTcData(tcData); setIsViewTcOpen(true); 
   }, []);
 
   const toggleTerminal = () => {
@@ -405,7 +336,7 @@ export default function App() {
     let isActive = true;
 
     if (!activeFileId) {
-      setTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 } as any]);
+      setActiveTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 } as any]);
       return;
     }
 
@@ -418,16 +349,15 @@ export default function App() {
       }
       return; // CỰC KỲ QUAN TRỌNG: Dừng hàm tại đây, không chạy xuống lệnh setIsFileLoading(true)
     } else {
-      setTestcases([]);
+      setActiveTestcases([]);
     }
 
     setIsFileLoading(true);
     loadFileData(activeFileId, activeFileId.toLowerCase().endsWith('.py')).then(cache => {
       if (!isActive) return; // Tránh ghi đè state nếu user đã chuyển tab khác trong lúc đang tải
       if (cache) {
-        isSettingFromLoad.current = true;
-        setSettings(cache.settings);
-        setTestcases(cache.testcases);
+        setActiveSettings(cache.settings);
+        setActiveTestcases(cache.testcases);
         
         if (!useAppStore.getState().monacoModels[activeFileId]) {
           const model = monaco.editor.createModel(cache.content, getLanguage(activeFileId), monaco.Uri.file(activeFileId));
@@ -435,13 +365,12 @@ export default function App() {
         }
         
         setIsDataDirty(false);
-        setTimeout(() => { isSettingFromLoad.current = false; }, 50);
       }
       setIsFileLoading(false);
     });
 
     return () => { isActive = false; };
-  }, [activeFileId, loadFileData, addMonacoModel]);
+  }, [activeFileId, loadFileData, addMonacoModel, setActiveSettings, setActiveTestcases]);
 
   // Tự động focus lại vào Editor mỗi khi chuyển đổi Tab
   useEffect(() => {
@@ -454,13 +383,6 @@ export default function App() {
     }
   }, [activeFileId]);
 
-  // Cập nhật cờ dirty khi có thay đổi từ người dùng
-  useEffect(() => {
-    // NGĂN CHẶN GHI ĐÈ: Không bao giờ bật cờ Save nếu Code đang chạy, bảo vệ trạng thái AC/WA trên Database.
-    if (isSettingFromLoad.current || !activeFileId || runStatus !== 'idle') return;
-    setIsDataDirty(true);
-    updateFileCache(activeFileId, { settings, testcases });
-  }, [settings, testcases, activeFileId, updateFileCache, runStatus]);
 
   const closeTab = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -520,42 +442,6 @@ export default function App() {
             title="Snippet Manager"
           >
             <Scissors size={20} />
-          </button>
-
-          <div className="w-px h-6 bg-[#333] mx-1" />
-
-          <button 
-            onClick={handleRun}
-            disabled={runStatus !== 'idle'}
-            className={cn(
-              "flex items-center gap-2 px-4 py-1.5 rounded text-sm font-medium transition-all active:scale-95 min-w-[120px] justify-center",
-              runStatus === 'idle' ? "bg-green-600 hover:bg-green-700 text-white" : "bg-blue-600/50 cursor-not-allowed text-gray-300"
-            )}
-          >
-            {runStatus === 'idle' ? (
-              <>
-                <Play size={16} fill="currentColor" />
-                Run Code
-              </>
-            ) : runStatus === 'compiling' ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                Compiling...
-              </>
-            ) : (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                Running {currentTestIndex}/{testcases.length}
-              </>
-            )}
-          </button>
-          
-          <button 
-            onClick={() => setIsSettingsOpen(true)}
-            className="p-2 rounded transition-colors hover:bg-[#333] text-gray-400"
-            title="Compiler Settings"
-          >
-            <SettingsIcon size={20} />
           </button>
 
           <div className="w-px h-6 bg-[#333] mx-1" />
@@ -756,13 +642,12 @@ export default function App() {
                   <div className="flex-1 overflow-hidden">
                     <div className={cn("h-full", activeTab === 'testcases' ? 'block' : 'hidden')}>
                       <TestcaseManager
-                        testcases={testcases}
-                        setTestcases={setTestcases}
-                        runStatus={runStatus}
-                        runSingleTestCase={runSingleTestCase}
+                        editorRef={editorRef}
+                        activeFileId={activeFileId}
+                        activeFile={activeFile}
+                        isFileLoading={isFileLoading}
+                        setIsDataDirty={setIsDataDirty}
                         onOpenDiff={handleOpenDiff}
-                        onOpenView={handleOpenView}
-                        addLog={addLog}
                         formatLogMessage={formatLogMessage}
                         isDiffSupported={isDiffSupported}
                       />
@@ -796,13 +681,6 @@ export default function App() {
           </Panel>
         </PanelGroup>
       </div>
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        settings={settings}
-        setSettings={setSettings}
-        isPythonFile={isPythonFile} // Pass a prop to indicate file type
-      />
 
       {globalConfig && (
         <GlobalSettingsModal
@@ -818,13 +696,6 @@ export default function App() {
         onClose={() => setIsDiffOpen(false)}
         expected={diffExpected}
         actual={diffActual}
-      />
-
-      <TestCaseViewerModal
-        isOpen={isViewTcOpen}
-        onClose={() => setIsViewTcOpen(false)}
-        tc={viewTcData ? (testcases.find(t => t.id === viewTcData.id) || null) : null}
-        onUpdate={updateTestCase}
       />
 
       <SnippetManagerModal
