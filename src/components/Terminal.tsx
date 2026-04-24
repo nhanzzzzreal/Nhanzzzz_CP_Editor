@@ -4,6 +4,7 @@ import { Xterm } from 'xterm-react';
 import { ITerminalOptions, Terminal as XtermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
+import { useAppStore } from '../store';
 
 // VSCode-like theme for xterm
 const terminalOptions: ITerminalOptions = {
@@ -38,7 +39,9 @@ const terminalOptions: ITerminalOptions = {
   disableStdin: true,
 };
 
-export const Terminal = React.memo(({ logs, onClear }: { logs: string[], onClear: () => void }) => {
+export const Terminal = React.memo(() => {
+  const logs = useAppStore(state => state.logs);
+  const onClear = useAppStore(state => state.clearLogs);
   const termRef: RefObject<XtermTerminal> = useRef<XtermTerminal>(null);
   const containerRef: RefObject<HTMLDivElement> = useRef<HTMLDivElement>(null);
   const prevLogsLengthRef = useRef(0);

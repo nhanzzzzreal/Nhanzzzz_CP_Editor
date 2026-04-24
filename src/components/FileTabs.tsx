@@ -3,17 +3,23 @@ import { File, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { FileNode } from '../types';
 import { useAppStore } from '../store';
+import { useDataStore } from '../dataStore';
 
 interface FileTabsProps {
-  openFileIds: string[];
-  activeFileId: string;
-  unsavedFileIds: Set<string>;
-  handleTabSwitch: (id: string) => void;
-  closeTab: (e: React.MouseEvent, id: string) => void;
-  setDraggedTabId: (id: string | null) => void;
-  draggedTabId: string | null;
-  findFileById: (id: string, nodes: FileNode[]) => FileNode | null;
-  fileTree: FileNode[];
+  setIsDataDirty: (dirty: boolean) => void;
+  saveFileData: (id: string) => void;
+  isDataDirty: boolean;
+}
+
+const findFileById = (id: string, nodes: FileNode[]): FileNode | null => {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    if (node.children) {
+      const found = findFileById(id, node.children);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 const getFileIconColor = (filename: string) => {
@@ -24,19 +30,44 @@ const getFileIconColor = (filename: string) => {
   return 'text-blue-300';
 };
 
-export const FileTabs: React.FC<FileTabsProps> = React.memo(({
-  openFileIds,
-  activeFileId,
-  unsavedFileIds,
-  handleTabSwitch,
-  closeTab,
-  setDraggedTabId,
-  draggedTabId,
-  findFileById,
-  fileTree,
-}) => {
-  // Dùng selector trỏ đích danh để tránh bị re-render do các state khác thay đổi
+export const FileTabs: React.FC<FileTabsProps> = React.memo(({ setIsDataDirty, saveFileData, isDataDirty }) => {
   const setOpenFileIds = useAppStore(state => state.setOpenFileIds);
+  const openFileIds = useAppStore(state => state.openFileIds);
+  const activeFileId = useAppStore(state => state.activeFileId);
+  const unsavedFileIds = useAppStore(state => state.unsavedFileIds);
+  const setActiveFileId = useAppStore(state => state.setActiveFileId);
+  const closeFile = useAppStore(state => state.closeFile);
+  const removeMonacoModel = useAppStore(state => state.removeMonacoModel);
+  const fileTree = useDataStore(state => state.fileTree);
+  const setActiveSettings = useDataStore(state => state.setActiveSettings);
+  const setActiveTestcases = useDataStore(state => state.setActiveTestcases);
+
+  const [draggedTabId, setDraggedTabId] = React.useState<string | null>(null);
+
+  const closeTab = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    closeFile(id);
+    removeMonacoModel(id);
+  };
+
+  const handleTabSwitch = (id: string) => {
+    if (id === activeFileId) return;
+    if (activeFileId) {
+      if (isDataDirty) {
+        saveFileData(activeFileId);
+      }
+    }
+    const targetCache = useDataStore.getState().fileCache[id];
+    setIsDataDirty(false);
+    setActiveFileId(id);
+    
+    if (targetCache) {
+      setActiveSettings(targetCache.settings);
+      setActiveTestcases(targetCache.testcases);
+    } else {
+      setActiveTestcases([]);
+    }
+  };
 
   return (
     <div className="flex bg-[#252526] overflow-x-auto scrollbar-none border-b border-[#333] shrink-0">

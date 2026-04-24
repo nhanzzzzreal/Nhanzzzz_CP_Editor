@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { TestCase } from '../types';
-import { FolderOpen, Plus, FlaskConical, Play, Loader2, Settings as SettingsIcon } from 'lucide-react';
+import { FolderOpen, Plus, Play, Loader2, Settings as SettingsIcon } from 'lucide-react';
 import { TestCaseItem } from './TestCaseItem';
 import { VirtualList } from '../VirtualList';
 import { useDataStore } from '../dataStore';
@@ -33,23 +33,20 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
   formatLogMessage,
   isDiffSupported = true
 }) => {
-  const {
-    activeTestcases: testcases,
-    setActiveTestcases: setTestcases,
-    activeSettings: settings,
-    setActiveSettings: setSettings,
-    globalConfig,
-    refreshFileData,
-    updateFileCache
-  } = useDataStore();
+  // Dùng Selectors để Component không bị Re-render khi fileTree thay đổi
+  const testcases = useDataStore(state => state.activeTestcases);
+  const setTestcases = useDataStore(state => state.setActiveTestcases);
+  const settings = useDataStore(state => state.activeSettings);
+  const setSettings = useDataStore(state => state.setActiveSettings);
+  const globalConfig = useDataStore(state => state.globalConfig);
+  const refreshFileData = useDataStore(state => state.refreshFileData);
+  const updateFileCache = useDataStore(state => state.updateFileCache);
 
-  const {
-    runStatus,
-    currentTestIndex,
-    isSettingsOpen,
-    setIsSettingsOpen,
-    addLog
-  } = useAppStore();
+  const runStatus = useAppStore(state => state.runStatus);
+  const currentTestIndex = useAppStore(state => state.currentTestIndex);
+  const isSettingsOpen = useAppStore(state => state.isSettingsOpen);
+  const setIsSettingsOpen = useAppStore(state => state.setIsSettingsOpen);
+  const addLog = useAppStore(state => state.addLog);
 
   const isPythonFile = useMemo(() => activeFileId.toLowerCase().endsWith('.py'), [activeFileId]);
 
@@ -71,8 +68,6 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
   const [isViewTcOpen, setIsViewTcOpen] = useState(false);
   const [viewTcData, setViewTcData] = useState<TestCase | null>(null);
 
-  const isSettingFromLoad = useRef(false);
-
   // Đồng bộ lại testcases từ Database sau khi chạy xong
   const prevRunStatus = useRef(runStatus);
   useEffect(() => {
@@ -80,9 +75,7 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
       if (activeFileId && !activeFileId.startsWith('temp')) {
         refreshFileData(activeFileId, isPythonFile).then(cache => {
           if (cache && cache.testcases && cache.testcases.length > 0) {
-            isSettingFromLoad.current = true;
             setTestcases(cache.testcases);
-            setTimeout(() => { isSettingFromLoad.current = false; }, 50);
           }
         });
       }
@@ -90,34 +83,17 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
     prevRunStatus.current = runStatus;
   }, [runStatus, activeFileId, isPythonFile, refreshFileData, setTestcases]);
 
-  // Khóa cờ dirty trong lúc File đang được load dữ liệu từ Server/Cache
-  useEffect(() => {
-    if (isFileLoading) {
-      isSettingFromLoad.current = true;
-    } else {
-      const timer = setTimeout(() => { isSettingFromLoad.current = false; }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [isFileLoading]);
-
   // Cập nhật cờ dirty khi có thay đổi từ người dùng
   useEffect(() => {
-    if (isSettingFromLoad.current || isFileLoading || !activeFileId || runStatus !== 'idle') return;
+    if (isFileLoading || !activeFileId || runStatus !== 'idle') return;
+    
+    const cache = useDataStore.getState().fileCache[activeFileId];
+    // Tuyệt kỹ: Nếu Data trên Store trỏ cùng vùng nhớ với Cache -> Hệ thống vừa nạp, không phải User sửa
+    if (cache && cache.settings === settings && cache.testcases === testcases) return;
+
     setIsDataDirty(true);
     updateFileCache(activeFileId, { settings, testcases });
   }, [settings, testcases, activeFileId, updateFileCache, runStatus, setIsDataDirty, isFileLoading]);
-
-  // Đồng bộ data từ cache khi file thay đổi
-  useEffect(() => {
-    if (!activeFileId) return;
-    const currentCache = useDataStore.getState().fileCache[activeFileId];
-    if (currentCache) {
-      isSettingFromLoad.current = true;
-      setSettings(currentCache.settings);
-      setTestcases(currentCache.testcases);
-      setTimeout(() => { isSettingFromLoad.current = false; }, 50);
-    }
-  }, [activeFileId, setSettings, setTestcases]);
 
   const handleOpenView = useCallback((tcData: TestCase) => { 
     setViewTcData(tcData); setIsViewTcOpen(true); 
@@ -132,17 +108,18 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
     });
   }, []);
 
-  const addTestCase = () => {
+  const addTestCase = useCallback(() => {
     setTestcases(prev => [...prev, { id: crypto.randomUUID(), name: `Test ${prev.length + 1}`, input: '', answer: '', output: '', status: 'pending', time: -1, memory: -1 } as any]);
-  };
+  }, [setTestcases]);
 
-  const removeTestCase = (id: string) => {
-    if (testcases.length > 1) {
-      setTestcases(prev => prev.filter(tc => tc.id !== id));
-    } else {
-      setTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: '', output: '', status: 'pending', time: -1, memory: -1 } as any]);
-    }
-  };
+  const removeTestCase = useCallback((id: string) => {
+    setTestcases(prev => {
+      if (prev.length > 1) {
+        return prev.filter(tc => tc.id !== id);
+      }
+      return [{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: '', output: '', status: 'pending', time: -1, memory: -1 } as any];
+    });
+  }, [setTestcases]);
 
   const updateTestCase = useCallback((id: string, field: keyof TestCase, value: string) => {
     setTestcases(prev => prev.map(tc => tc.id === id ? { ...tc, [field]: value } : tc));

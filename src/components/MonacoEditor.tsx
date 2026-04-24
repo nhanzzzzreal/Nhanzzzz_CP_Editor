@@ -1,13 +1,12 @@
 import React, { useRef, forwardRef, useImperativeHandle, useEffect, memo } from 'react';
 import { GlobalConfig } from '../types';
 import { useAppStore } from '../store';
+import { useDataStore } from '../dataStore';
 import * as monaco from 'monaco-editor';
 
 interface CodeEditorProps {
-  activeFileId: string;
   onContentChange: () => void;
   onSave: () => void;
-  globalConfig?: GlobalConfig;
 }
 
 export interface CodeEditorRef {
@@ -16,11 +15,12 @@ export interface CodeEditorRef {
 }
 
 export const MonacoEditor = memo(forwardRef<CodeEditorRef, CodeEditorProps>(({
-  activeFileId,
   onContentChange,
   onSave,
-  globalConfig,
 }, ref) => {
+  const activeFileId = useAppStore(state => state.activeFileId);
+  const globalConfig = useDataStore(state => state.globalConfig);
+  
   const containerRef = useRef<HTMLDivElement>(null);
   const editorInstanceRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const prevFileIdRef = useRef(activeFileId);
