@@ -131,7 +131,7 @@ const TestCaseItemComponent = ({
       </div>
 
       {isExpanded && (
-        <div className="space-y-3 animate-in fade-in duration-200 mt-2 border-t border-[#333] pt-3">
+        <div className="space-y-3 mt-2 border-t border-[#333] pt-3">
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="block text-[10px] text-gray-500 uppercase tracking-wider">Input</label>

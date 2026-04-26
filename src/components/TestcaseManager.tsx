@@ -9,35 +9,53 @@ import { useCodeExecution } from '../hooks/useCodeExecution';
 import { SettingsModal } from './SettingsModal';
 import { TestCaseViewerModal } from './TestCaseViewerModal';
 import { cn } from '../lib/utils';
+import { useSessionStore } from '../sessionStore';
 
 const API_BASE_URL = 'http://localhost:3691/api';
 
+const generateId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tc-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
 interface Props {
-  activeFileId: string;
-  activeFile: any;
+  sessionId: string;
   editorRef: React.RefObject<any>;
-  isFileLoading: boolean;
-  setIsDataDirty: React.Dispatch<React.SetStateAction<boolean>>;
   onOpenDiff: (expected: string, actual: string) => void;
   formatLogMessage: (msg: string) => string;
   isDiffSupported?: boolean;
 }
 
 export const TestcaseManager: React.FC<Props> = React.memo(({
-  activeFileId,
-  activeFile,
+  sessionId,
   editorRef,
-  isFileLoading,
-  setIsDataDirty,
   onOpenDiff,
   formatLogMessage,
   isDiffSupported = true
 }) => {
-  // Dùng Selectors để Component không bị Re-render khi fileTree thay đổi
-  const testcases = useDataStore(state => state.activeTestcases);
-  const setTestcases = useDataStore(state => state.setActiveTestcases);
-  const settings = useDataStore(state => state.activeSettings);
-  const setSettings = useDataStore(state => state.setActiveSettings);
+  const updateSession = useSessionStore(state => state.updateSession);
+  
+  const rawTestcases = useSessionStore(state => state.sessions[sessionId]?.testcases);
+  const testcases = rawTestcases || [];
+  const setTestcases = useCallback((updater: any) => {
+      updateSession(sessionId, { 
+          // KHÔNG set isDirty: true ở đây nữa, vì server stream output cũng gọi hàm này
+          testcases: typeof updater === 'function' ? updater(useSessionStore.getState().sessions[sessionId]?.testcases || []) : updater
+      });
+  }, [sessionId, updateSession]);
+
+  const isPythonFile = useMemo(() => sessionId?.toLowerCase().endsWith('.py') || false, [sessionId]);
+  const defaultSettings = useMemo(() => isPythonFile 
+      ? { compiler: 'python', timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '' }
+      : { compiler: 'g++', optimization: 'O2', warnings: true, extraWarnings: true, std: 'c++14', timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '' }
+  , [isPythonFile]);
+
+  const rawSettings = useSessionStore(state => state.sessions[sessionId]?.settings);
+  const settings = (rawSettings && (rawSettings as any).compiler) ? rawSettings : defaultSettings as any;
+  const setSettings = useCallback((updater: any) => {
+      updateSession(sessionId, { 
+          settings: typeof updater === 'function' ? updater(useSessionStore.getState().sessions[sessionId]?.settings || defaultSettings) : updater,
+          isDirty: true
+      });
+  }, [sessionId, updateSession, defaultSettings]);
+
   const globalConfig = useDataStore(state => state.globalConfig);
   const refreshFileData = useDataStore(state => state.refreshFileData);
   const updateFileCache = useDataStore(state => state.updateFileCache);
@@ -48,32 +66,43 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
   const setIsSettingsOpen = useAppStore(state => state.setIsSettingsOpen);
   const addLog = useAppStore(state => state.addLog);
 
-  const isPythonFile = useMemo(() => activeFileId.toLowerCase().endsWith('.py'), [activeFileId]);
+  const isFileLoading = useSessionStore(state => state.sessions[sessionId]?.isLoading || false);
 
   const { handleRun, runSingleTestCase } = useCodeExecution({
-    activeFileId,
-    activeFile,
+    activeFileId: sessionId,
+    activeFile: { id: sessionId, name: sessionId.split('/').pop() || '', type: 'file' },
     editorRef,
     settings,
     globalConfig,
     testcases,
     setTestcases,
     isFileLoading,
-    setIsDataDirty,
+    setIsDataDirty: (dirty) => updateSession(sessionId, { isDirty: dirty }),
     formatLogMessage
   });
 
   // Lift State Up: Quản lý trạng thái đóng/mở của các testcase tại đây để không bị mất khi cuộn
-  const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
   const [isViewTcOpen, setIsViewTcOpen] = useState(false);
   const [viewTcData, setViewTcData] = useState<TestCase | null>(null);
+  
+  const rawExpandedCases = useSessionStore(state => state.sessions[sessionId]?.expandedCases);
+  const expandedCasesList = rawExpandedCases || [];
+  const expandedCases = useMemo(() => new Set(expandedCasesList), [expandedCasesList]);
+
+  // Dọn dẹp Local State khi chuyển tab để ngăn việc View Modal hiển thị data của tab cũ
+  useEffect(() => {
+    setIsViewTcOpen(false);
+    setViewTcData(null);
+  }, [sessionId]);
 
   // Đồng bộ lại testcases từ Database sau khi chạy xong
   const prevRunStatus = useRef(runStatus);
   useEffect(() => {
     if (prevRunStatus.current !== 'idle' && runStatus === 'idle') {
-      if (activeFileId && !activeFileId.startsWith('temp')) {
-        refreshFileData(activeFileId, isPythonFile).then(cache => {
+      // CỰC KỲ QUAN TRỌNG: Chỉ load lại data nếu file này ĐANG là file active vừa được chạy.
+      // Nếu không, mọi Tab đang mở đều tự động load lại và gây loạn State.
+      if (sessionId && !sessionId.startsWith('temp') && sessionId === useSessionStore.getState().activeSessionId) {
+        refreshFileData(sessionId, isPythonFile).then(cache => {
           if (cache && cache.testcases && cache.testcases.length > 0) {
             setTestcases(cache.testcases);
           }
@@ -81,50 +110,44 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
       }
     }
     prevRunStatus.current = runStatus;
-  }, [runStatus, activeFileId, isPythonFile, refreshFileData, setTestcases]);
+  }, [runStatus, sessionId, isPythonFile, refreshFileData, setTestcases]);
 
   // Cập nhật cờ dirty khi có thay đổi từ người dùng
   useEffect(() => {
-    if (isFileLoading || !activeFileId || runStatus !== 'idle') return;
-    
-    const cache = useDataStore.getState().fileCache[activeFileId];
-    // Tuyệt kỹ: Nếu Data trên Store trỏ cùng vùng nhớ với Cache -> Hệ thống vừa nạp, không phải User sửa
-    if (cache && cache.settings === settings && cache.testcases === testcases) return;
-
-    setIsDataDirty(true);
-    updateFileCache(activeFileId, { settings, testcases });
-  }, [settings, testcases, activeFileId, updateFileCache, runStatus, setIsDataDirty, isFileLoading]);
+    if (isFileLoading || !sessionId || runStatus !== 'idle') return;
+    updateFileCache(sessionId, { settings, testcases });
+  }, [settings, testcases, sessionId, updateFileCache, runStatus, isFileLoading]);
 
   const handleOpenView = useCallback((tcData: TestCase) => { 
     setViewTcData(tcData); setIsViewTcOpen(true); 
   }, []);
 
   const handleToggleExpand = useCallback((id: string) => {
-    setExpandedCases(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+    const next = new Set(expandedCasesList);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    updateSession(sessionId, { expandedCases: Array.from(next) });
+  }, [sessionId, expandedCasesList, updateSession]);
 
   const addTestCase = useCallback(() => {
-    setTestcases(prev => [...prev, { id: crypto.randomUUID(), name: `Test ${prev.length + 1}`, input: '', answer: '', output: '', status: 'pending', time: -1, memory: -1 } as any]);
-  }, [setTestcases]);
+    setTestcases((prev: TestCase[]) => [...prev, { id: generateId(), name: `Test ${prev.length + 1}`, input: '', answer: '', output: '', status: 'pending', time: -1, memory: -1 } as any]);
+    updateSession(sessionId, { isDirty: true }); // User chủ động Add -> Dirty
+  }, [setTestcases, sessionId, updateSession]);
 
   const removeTestCase = useCallback((id: string) => {
-    setTestcases(prev => {
+    setTestcases((prev: TestCase[]) => {
       if (prev.length > 1) {
         return prev.filter(tc => tc.id !== id);
       }
-      return [{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: '', output: '', status: 'pending', time: -1, memory: -1 } as any];
+      return [{ id: generateId(), name: 'Test 1', input: '', answer: '', output: '', status: 'pending', time: -1, memory: -1 } as any];
     });
-  }, [setTestcases]);
+    updateSession(sessionId, { isDirty: true }); // User chủ động Xóa -> Dirty
+  }, [setTestcases, sessionId, updateSession]);
 
   const updateTestCase = useCallback((id: string, field: keyof TestCase, value: string) => {
-    setTestcases(prev => prev.map(tc => tc.id === id ? { ...tc, [field]: value } : tc));
-    setIsDataDirty(true);
-  }, [setTestcases, setIsDataDirty]);
+    setTestcases((prev: TestCase[]) => prev.map(tc => tc.id === id ? { ...tc, [field]: value } : tc));
+    updateSession(sessionId, { isDirty: true }); // User chủ động Sửa -> Dirty
+  }, [setTestcases, sessionId, updateSession]);
 
   const handleFolderSelect = async () => {
     try {
@@ -156,7 +179,7 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
             onClick={handleRun}
             disabled={runStatus !== 'idle'}
             className={cn(
-              "flex items-center gap-2 px-4 py-1.5 rounded text-sm font-medium transition-all active:scale-95 flex-1 justify-center",
+              "flex items-center gap-2 px-4 py-1.5 rounded text-sm font-medium transition active:scale-95 flex-1 justify-center",
               runStatus === 'idle' ? "bg-green-600 hover:bg-green-700 text-white" : "bg-blue-600/50 cursor-not-allowed text-gray-300"
             )}
           >
@@ -219,7 +242,7 @@ export const TestcaseManager: React.FC<Props> = React.memo(({
           )}
           footer={
             <div className="pr-2 pt-2 pb-6">
-              <button onClick={addTestCase} className="w-full py-3 border-2 border-dashed border-[#3c3c3c] rounded-lg text-gray-500 hover:text-gray-300 hover:border-[#555] transition-all flex items-center justify-center gap-2 text-sm font-medium">
+              <button onClick={addTestCase} className="w-full py-3 border-2 border-dashed border-[#3c3c3c] rounded-lg text-gray-500 hover:text-gray-300 hover:border-[#555] transition-colors flex items-center justify-center gap-2 text-sm font-medium">
                 <Plus size={16} /> Add New Testcase
               </button>
             </div>

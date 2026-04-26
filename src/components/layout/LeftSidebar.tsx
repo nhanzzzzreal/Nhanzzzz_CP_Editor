@@ -1,24 +1,19 @@
-import React, { useCallback } from 'react';
+import React, { memo } from 'react';
 import { FolderOpen, FilePlus, Folder, FolderTree, Loader2 } from 'lucide-react';
-import { useAppStore } from '../../store';
 import { useDataStore } from '../../dataStore';
 import { FileExplorer } from '../FileExplorer';
 import { useTreeOperations } from '../../hooks/useTreeOperations';
-import { FileNode } from '../../types';
 
 interface LeftSidebarProps {
   formatLogMessage: (msg: string) => string;
   handleOpenWorkspace: () => void;
 }
 
-export const LeftSidebar: React.FC<LeftSidebarProps> = ({ formatLogMessage, handleOpenWorkspace }) => {
-  const { activeFileId, openFile, showContextMenu } = useAppStore();
-  const { fileTree, isFileTreeLoading, fetchFileTree } = useDataStore();
-  const { handleCreateItem, handleRenameNode, handleDeleteNode } = useTreeOperations(formatLogMessage);
-
-  const handleFileClick = useCallback(async (node: FileNode) => {
-    if (node.type === 'file') openFile(node.id);
-  }, [openFile]);
+export const LeftSidebar: React.FC<LeftSidebarProps> = memo(({ formatLogMessage, handleOpenWorkspace }) => {
+  const fileTree = useDataStore(state => state.fileTree);
+  const isFileTreeLoading = useDataStore(state => state.isFileTreeLoading);
+  const fetchFileTree = useDataStore(state => state.fetchFileTree);
+  const { handleCreateItem } = useTreeOperations(formatLogMessage);
 
   return (
     <div className="h-full flex flex-col bg-[#252526] border-r border-[#333] overflow-hidden">
@@ -47,14 +42,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ formatLogMessage, hand
         ) : fileTree.length > 0 ? (
           <FileExplorer
             fileTree={fileTree}
-            activeFileId={activeFileId}
             isLoading={isFileTreeLoading}
-            onFileClick={handleFileClick}
-            onContextMenu={showContextMenu}
-            onRenameNode={handleRenameNode}
           />
         ) : <div className="text-center text-xs text-gray-600 p-4">Workspace is empty.</div>}
       </div>
     </div>
   );
-};
+});

@@ -116,7 +116,7 @@ export const DiffViewerModal = ({ isOpen, onClose, expected, actual }: DiffViewe
             <div 
               ref={leftRef}
               onScroll={(e) => handleScroll('left', e)}
-              className="flex-1 overflow-y-auto overflow-x-hidden bg-[#1e1e1e] scrollbar-thin scrollbar-thumb-[#444]"
+              className="flex-1 overflow-y-auto overflow-x-hidden bg-[#1e1e1e]"
             >
               {loading ? <div className="p-4 text-gray-500 text-sm">Loading diff...</div> : renderLines('left')}
             </div>
@@ -130,7 +130,7 @@ export const DiffViewerModal = ({ isOpen, onClose, expected, actual }: DiffViewe
             <div 
               ref={rightRef}
               onScroll={(e) => handleScroll('right', e)}
-              className="flex-1 overflow-y-auto overflow-x-hidden bg-[#1e1e1e] scrollbar-thin scrollbar-thumb-[#444]"
+              className="flex-1 overflow-y-auto overflow-x-hidden bg-[#1e1e1e]"
             >
               {loading ? <div className="p-4 text-gray-500 text-sm">Loading diff...</div> : renderLines('right')}
             </div>

@@ -10,15 +10,14 @@ interface FileCacheData {
   isDirty: boolean;
 }
 
+// Hàm tạo ID an toàn, không bị crash khi chạy trên mạng LAN (HTTP)
+const generateId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tc-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
 interface DataStore {
   globalConfig: GlobalConfig | null;
   fileTree: FileNode[];
   fileCache: Record<string, FileCacheData>;
   isFileTreeLoading: boolean;
-  activeTestcases: TestCase[];
-  setActiveTestcases: (updater: TestCase[] | ((prev: TestCase[]) => TestCase[])) => void;
-  activeSettings: AppSettings;
-  setActiveSettings: (updater: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
   
   fetchGlobalConfig: () => Promise<void>;
   saveGlobalConfig: (config: GlobalConfig) => Promise<void>;
@@ -28,6 +27,7 @@ interface DataStore {
   updateFileCache: (path: string, data: Partial<FileCacheData>) => void;
   saveFileData: (path: string) => Promise<void>;
   saveFileContent: (path: string, content: string) => Promise<void>;
+  removeFileCache: (path: string) => void;
   openWorkspace: () => Promise<string | null>;
   openFileDialog: () => Promise<{path: string, name: string} | null>;
   createItem: (parent_path: string, name: string, type: 'file' | 'folder') => Promise<void>;
@@ -40,14 +40,6 @@ export const useDataStore = create<DataStore>((set, get) => ({
   fileTree: [],
   fileCache: {},
   isFileTreeLoading: false,
-  activeTestcases: [{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 }] as any,
-  setActiveTestcases: (updater) => set((state) => ({
-    activeTestcases: typeof updater === 'function' ? updater(state.activeTestcases) : updater
-  })),
-  activeSettings: { compiler: 'g++', optimization: 'O2', warnings: true, extraWarnings: true, std: 'c++14', timeLimit: 1000, memoryLimit: 256, useSandbox: true, useFileIO: true, customFileName: '' } as any,
-  setActiveSettings: (updater) => set((state) => ({
-    activeSettings: typeof updater === 'function' ? updater(state.activeSettings) : updater
-  })),
 
   fetchGlobalConfig: async () => {
     try {
@@ -98,7 +90,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
       
       let testcases = data.testcases;
       if (!testcases || testcases.length === 0) {
-        testcases = [{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 }];
+        testcases = [{ id: generateId(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 }];
       }
 
       const cacheData = { settings, testcases, content: data.content || '', isDirty: false };
@@ -115,7 +107,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     try {
       const res = await fetch(`${API_BASE_URL}/files/data?path=${encodeURIComponent(path)}`);
       const data = await res.json();
-      const testcases = (data.testcases && data.testcases.length > 0) ? data.testcases : [{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 }];
+      const testcases = (data.testcases && data.testcases.length > 0) ? data.testcases : [{ id: generateId(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 }];
       
       set((state) => {
         const existing = state.fileCache[path];
@@ -154,6 +146,12 @@ export const useDataStore = create<DataStore>((set, get) => ({
       await fetch(`${API_BASE_URL}/files/content`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, content }) });
     } catch (e) { console.error(e); }
   },
+
+  removeFileCache: (path) => set(state => {
+    const newCache = { ...state.fileCache };
+    delete newCache[path];
+    return { fileCache: newCache };
+  }),
 
   openWorkspace: async () => {
     try { const res = await fetch(`${API_BASE_URL}/workspace/open-dialog`, { method: 'POST' }); const data = await res.json(); if (data.status === 'ok') return data.path; } catch (e) { console.error(e); } return null;

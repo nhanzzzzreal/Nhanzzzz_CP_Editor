@@ -19,6 +19,7 @@ import { useFileWatcher } from './hooks/useFileWatcher';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useAppHotkeys } from './hooks/useAppHotkeys';
 import { GlobalConfig } from './types';
+import { useSessionStore } from './sessionStore';
 
 const getLanguage = (filename: string) => {
   const lower = filename.toLowerCase();
@@ -36,25 +37,16 @@ export default function App() {
   const hideContextMenu = useAppStore(state => state.hideContextMenu);
   const setTerminalOpen = useAppStore(state => state.setTerminalOpen);
   const setTreeOpen = useAppStore(state => state.setTreeOpen);
-  const openFileIds = useAppStore(state => state.openFileIds);
-  const activeFileId = useAppStore(state => state.activeFileId);
-  const addMonacoModel = useAppStore(state => state.addMonacoModel);
-  const hydrateStore = useAppStore(state => state.hydrate);
 
   const globalConfig = useDataStore(state => state.globalConfig);
   const fetchGlobalConfig = useDataStore(state => state.fetchGlobalConfig);
   const fetchFileTree = useDataStore(state => state.fetchFileTree);
   const saveGlobalConfig = useDataStore(state => state.saveGlobalConfig);
-  const loadFileData = useDataStore(state => state.loadFileData);
-  const setActiveSettings = useDataStore(state => state.setActiveSettings);
-  const setActiveTestcases = useDataStore(state => state.setActiveTestcases);
 
   const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [diffExpected, setDiffExpected] = useState('');
   const [diffActual, setDiffActual] = useState('');
-  const [isDataDirty, setIsDataDirty] = useState(false);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
-  const [isFileLoading, setIsFileLoading] = useState(false);
   
   const editorRef = useRef<CodeEditorRef>(null);
   const terminalPanelRef = useRef<ImperativePanelHandle>(null);
@@ -63,7 +55,7 @@ export default function App() {
   
   // Use custom hooks
   useFileWatcher();
-  const { saveActiveFile } = useAutoSave(editorRef, isDataDirty, setIsDataDirty, formatLogMessage);
+  const { saveActiveFile } = useAutoSave(editorRef, formatLogMessage);
   const { handleOpenWorkspace } = useAppHotkeys(saveActiveFile, formatLogMessage);
 
   useEffect(() => {
@@ -80,10 +72,11 @@ export default function App() {
   const isHydrated = useRef(false);
   useEffect(() => {
     if (globalConfig && !isHydrated.current) {
-      hydrateStore(globalConfig);
+      useSessionStore.getState().setOpenSessionIds(globalConfig.openFileIds || []);
+      useSessionStore.getState().setActiveSessionId(globalConfig.activeFileId || '');
       isHydrated.current = true;
     }
-  }, [globalConfig, hydrateStore]);
+  }, [globalConfig]);
 
   const debouncedSaveGlobalConfig = useDebouncedCallback((config: GlobalConfig) => {
     saveGlobalConfig(config);
@@ -93,68 +86,24 @@ export default function App() {
   useEffect(() => { latestConfigRef.current = globalConfig; }, [globalConfig]);
 
   useEffect(() => {
-    if (latestConfigRef.current && isHydrated.current) { 
-      debouncedSaveGlobalConfig({ ...latestConfigRef.current, openFileIds, activeFileId });
-    }
-  }, [openFileIds, activeFileId, debouncedSaveGlobalConfig]);
+    let prevOpenIds = useSessionStore.getState().openSessionIds;
+    let prevActiveId = useSessionStore.getState().activeSessionId;
+
+    const unsub = useSessionStore.subscribe((state) => {
+      if (state.openSessionIds !== prevOpenIds || state.activeSessionId !== prevActiveId) {
+        prevOpenIds = state.openSessionIds;
+        prevActiveId = state.activeSessionId;
+        if (latestConfigRef.current && isHydrated.current) { 
+          debouncedSaveGlobalConfig({ ...latestConfigRef.current, openFileIds: state.openSessionIds, activeFileId: state.activeSessionId });
+        }
+      }
+    });
+    return unsub;
+  }, [debouncedSaveGlobalConfig]);
 
   const handleOpenDiff = useCallback((expected: string, actual: string) => { 
     setDiffExpected(expected); setDiffActual(actual); setIsDiffOpen(true); 
   }, []);
-
-  useEffect(() => {
-    let isActive = true;
-
-    if (!activeFileId) {
-      setActiveTestcases([{ id: crypto.randomUUID(), name: 'Test 1', input: '', answer: null, output: '', status: 'pending', time: -1, memory: -1 } as any]);
-      return;
-    }
-
-    const currentCache = useDataStore.getState().fileCache[activeFileId];
-    if (currentCache) {
-      if (!useAppStore.getState().monacoModels[activeFileId]) {
-        const model = monaco.editor.createModel(currentCache.content, getLanguage(activeFileId), monaco.Uri.file(activeFileId));
-        addMonacoModel(activeFileId, model);
-      }
-        
-        // Đẩy thẳng dữ liệu Testcases và Settings đã cache xuống Store (Gom về 1 mối duy nhất)
-        setActiveSettings(currentCache.settings);
-        setActiveTestcases(currentCache.testcases);
-        setIsDataDirty(false);
-      return; 
-    } else {
-      setActiveTestcases([]);
-    }
-
-    setIsFileLoading(true);
-    loadFileData(activeFileId, activeFileId.toLowerCase().endsWith('.py')).then(cache => {
-      if (!isActive) return; 
-      if (cache) {
-        setActiveSettings(cache.settings);
-        setActiveTestcases(cache.testcases);
-        
-        if (!useAppStore.getState().monacoModels[activeFileId]) {
-          const model = monaco.editor.createModel(cache.content, getLanguage(activeFileId), monaco.Uri.file(activeFileId));
-          addMonacoModel(activeFileId, model);
-        }
-        
-        setIsDataDirty(false);
-      }
-      setIsFileLoading(false);
-    });
-
-    return () => { isActive = false; };
-  }, [activeFileId, loadFileData, addMonacoModel, setActiveSettings, setActiveTestcases]);
-
-  useEffect(() => {
-    if (activeFileId) {
-      setTimeout(() => {
-        if (editorRef.current && typeof (editorRef.current as any).focus === 'function') {
-          (editorRef.current as any).focus();
-        }
-      }, 100);
-    }
-  }, [activeFileId]);
 
 
   const insertSnippet = (content: string) => {
@@ -197,9 +146,6 @@ export default function App() {
               <Panel defaultSize={55} minSize={20}>
                 <EditorArea
                   editorRef={editorRef}
-                  isFileLoading={isFileLoading}
-                  isDataDirty={isDataDirty}
-                  setIsDataDirty={setIsDataDirty}
                   saveActiveFile={saveActiveFile}
                   formatLogMessage={formatLogMessage}
                 />
@@ -222,8 +168,6 @@ export default function App() {
               >
                 <RightPanel
                   editorRef={editorRef}
-                  isFileLoading={isFileLoading}
-                  setIsDataDirty={setIsDataDirty}
                   handleOpenDiff={handleOpenDiff}
                   formatLogMessage={formatLogMessage}
                   isDiffSupported={true}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Maximize2, Columns, Rows } from 'lucide-react';
 import { TestCase } from '../types';
 
@@ -24,7 +25,7 @@ const LineNumberedArea = ({ value, onChange, onBlur, readOnly, placeholder }: { 
       {readOnly ? (
          <div
            onScroll={handleScroll}
-           className="flex-1 w-full min-h-0 p-4 font-mono text-xs leading-5 text-gray-300 whitespace-pre overflow-auto scrollbar-thin scrollbar-thumb-[#444]"
+           className="flex-1 w-full min-h-0 p-4 font-mono text-xs leading-5 text-gray-300 whitespace-pre overflow-auto"
          >
            {value || <span className="text-gray-600 italic">No output</span>}
          </div>
@@ -37,7 +38,7 @@ const LineNumberedArea = ({ value, onChange, onBlur, readOnly, placeholder }: { 
           spellCheck={false}
           wrap="off"
           placeholder={placeholder}
-          className="flex-1 w-full min-h-0 bg-transparent p-4 font-mono text-xs leading-5 text-gray-300 whitespace-pre overflow-auto scrollbar-thin scrollbar-thumb-[#444] resize-none outline-none focus:ring-1 focus:ring-purple-500/50 transition-shadow"
+          className="flex-1 w-full min-h-0 bg-transparent p-4 font-mono text-xs leading-5 text-gray-300 whitespace-pre overflow-auto resize-none outline-none focus:ring-1 focus:ring-purple-500/50 transition-shadow"
         />
       )}
     </div>
@@ -80,9 +81,9 @@ export const TestCaseViewerModal = ({ isOpen, onClose, tc, onUpdate }: TestCaseV
     onClose();
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="bg-[#1e1e1e] border border-[#333] rounded-xl shadow-2xl w-full max-w-6xl h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-[#1e1e1e] border border-[#333] rounded-xl shadow-2xl w-full max-w-6xl h-[85vh] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-[#333] bg-[#252526] shrink-0">
           <div className="flex items-center gap-2 font-bold text-sm tracking-wide">
             <Maximize2 size={16} className="text-purple-400" />
@@ -142,6 +143,7 @@ export const TestCaseViewerModal = ({ isOpen, onClose, tc, onUpdate }: TestCaseV
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

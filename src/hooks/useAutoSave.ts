@@ -1,41 +1,35 @@
-import { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { useAppStore } from '../store';
 import { useDataStore } from '../dataStore';
+import { useSessionStore } from '../sessionStore';
 import { CodeEditorRef } from '../components/MonacoEditor';
 
 export const useAutoSave = (
   editorRef: React.RefObject<CodeEditorRef>,
-  isDataDirty: boolean,
-  setIsDataDirty: (v: boolean) => void,
   formatLogMessage: (msg: string) => string
 ) => {
-  const { activeFileId, unsavedFileIds, removeUnsaved, addLog } = useAppStore();
-  const { globalConfig, saveFileContent, saveFileData } = useDataStore();
-
-  const latestStateRef = useRef({ activeFileId, unsavedFileIds, isDataDirty });
-  useEffect(() => { latestStateRef.current = { activeFileId, unsavedFileIds, isDataDirty }; }, [activeFileId, unsavedFileIds, isDataDirty]);
+  const addLog = useAppStore(state => state.addLog);
+  const globalConfig = useDataStore(state => state.globalConfig);
+  const saveFileContent = useDataStore(state => state.saveFileContent);
+  const saveFileData = useDataStore(state => state.saveFileData);
 
   const saveActiveFile = useCallback(() => {
-    const state = latestStateRef.current;
-    if (!state.activeFileId || state.activeFileId.startsWith('temp')) return;
-    let saved = false;
+    const activeSessionId = useSessionStore.getState().activeSessionId;
+    if (!activeSessionId || activeSessionId.startsWith('temp')) return;
 
-    if (state.unsavedFileIds.has(state.activeFileId)) {
-      const currentContent = editorRef.current?.getValue() || '';
-      saveFileContent(state.activeFileId, currentContent);
-      removeUnsaved(state.activeFileId);
-      saved = true;
+    const session = useSessionStore.getState().sessions[activeSessionId];
+    if (!session?.isDirty) {
+      addLog(formatLogMessage(`No changes to save.`));
+      return;
     }
 
-    if (state.isDataDirty) {
-      saveFileData(state.activeFileId);
-      setIsDataDirty(false);
-      saved = true;
-    }
-
-    if (saved) addLog(formatLogMessage(`File saved successfully.`));
-    else addLog(formatLogMessage(`No changes to save.`));
-  }, [removeUnsaved, saveFileContent, saveFileData, setIsDataDirty, addLog, formatLogMessage, editorRef]);
+    const currentContent = editorRef.current?.getValue() || '';
+    saveFileContent(activeSessionId, currentContent);
+    saveFileData(activeSessionId);
+    
+    useSessionStore.getState().updateSession(activeSessionId, { isDirty: false });
+    addLog(formatLogMessage(`File saved successfully.`));
+  }, [saveFileContent, saveFileData, addLog, formatLogMessage, editorRef]);
 
   useEffect(() => {
     const delay = globalConfig?.autoSaveDelay || 10000;

@@ -7,11 +7,11 @@
     "editorFontFamily": "Consolas, 'Courier New', monospace",
     "appVersion": "v1.0.0",
     "openFileIds": [
-        "Z:/CP/Problems/qmax/qmax.cpp",
         "Z:/CP/Basic/quaylui/caitui/caitui.py",
+        "Z:/CP/Problems/qmax/qmax.cpp",
         "Z:/CP/working/aplusb.cpp"
     ],
-    "activeFileId": "Z:/CP/Problems/qmax/qmax.cpp",
+    "activeFileId": "Z:/CP/Basic/quaylui/caitui/caitui.py",
     "treeState": {
         "Z:/CP/temp": true,
         "Z:/CP/marisa": true

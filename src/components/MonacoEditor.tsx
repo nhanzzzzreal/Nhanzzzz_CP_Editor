@@ -1,7 +1,7 @@
 import React, { useRef, forwardRef, useImperativeHandle, useEffect, memo } from 'react';
 import { GlobalConfig } from '../types';
-import { useAppStore } from '../store';
 import { useDataStore } from '../dataStore';
+import { useSessionStore } from '../sessionStore';
 import * as monaco from 'monaco-editor';
 
 interface CodeEditorProps {
@@ -18,12 +18,13 @@ export const MonacoEditor = memo(forwardRef<CodeEditorRef, CodeEditorProps>(({
   onContentChange,
   onSave,
 }, ref) => {
-  const activeFileId = useAppStore(state => state.activeFileId);
+  const activeSessionId = useSessionStore(state => state.activeSessionId);
+  const activeModel = useSessionStore(state => state.sessions[state.activeSessionId]?.model);
   const globalConfig = useDataStore(state => state.globalConfig);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const editorInstanceRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const prevFileIdRef = useRef(activeFileId);
+  const prevFileIdRef = useRef(activeSessionId);
   
   const onSaveRef = useRef(onSave);
   useEffect(() => {
@@ -82,23 +83,26 @@ export const MonacoEditor = memo(forwardRef<CodeEditorRef, CodeEditorProps>(({
   }, []);
 
   useEffect(() => {
-    const { monacoModels, updateMonacoModelCursor } = useAppStore.getState();
     const editor = editorInstanceRef.current;
     
-    if (editor && prevFileIdRef.current && prevFileIdRef.current !== activeFileId) {
-       const viewState = editor.saveViewState();
-       updateMonacoModelCursor(prevFileIdRef.current, viewState);
-    }
-    
-    if (editor && monacoModels[activeFileId]) {
-      editor.setModel(monacoModels[activeFileId].model);
-      if (monacoModels[activeFileId].cursorState) {
-        editor.restoreViewState(monacoModels[activeFileId].cursorState);
+    if (editor) {
+      if (prevFileIdRef.current && prevFileIdRef.current !== activeSessionId) {
+        const viewState = editor.saveViewState();
+        useSessionStore.getState().updateSession(prevFileIdRef.current, { viewState });
+      }
+      
+      if (activeModel && editor.getModel() !== activeModel) {
+        editor.setModel(activeModel);
+        const viewState = useSessionStore.getState().sessions[activeSessionId]?.viewState;
+        if (viewState) {
+          editor.restoreViewState(viewState);
+        }
+        editor.focus();
       }
     }
     
-    prevFileIdRef.current = activeFileId;
-  }, [activeFileId]);
+    prevFileIdRef.current = activeSessionId;
+  }, [activeSessionId, activeModel]);
 
   // 2. Cập nhật tuỳ chọn Cỡ chữ theo thời gian thực (nếu settings bị đổi)
   useEffect(() => {

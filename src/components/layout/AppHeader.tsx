@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Terminal as TerminalIcon, FlaskConical, FolderTree, Settings as SettingsIcon, Scissors } from 'lucide-react';
 import { useAppStore } from '../../store';
 import { cn } from '../../lib/utils';
@@ -11,11 +11,11 @@ interface AppHeaderProps {
   treePanelRef: React.RefObject<ImperativePanelHandle>;
 }
 
-export const AppHeader: React.FC<AppHeaderProps> = ({ isRightPanelOpen, rightPanelRef, terminalPanelRef, treePanelRef }) => {
-  const { 
-    setIsGlobalSettingsOpen, setIsSnippetManagerOpen,
-    isTerminalOpen, isTreeOpen
-  } = useAppStore();
+export const AppHeader: React.FC<AppHeaderProps> = memo(({ isRightPanelOpen, rightPanelRef, terminalPanelRef, treePanelRef }) => {
+  const setIsGlobalSettingsOpen = useAppStore(state => state.setIsGlobalSettingsOpen);
+  const setIsSnippetManagerOpen = useAppStore(state => state.setIsSnippetManagerOpen);
+  const isTerminalOpen = useAppStore(state => state.isTerminalOpen);
+  const isTreeOpen = useAppStore(state => state.isTreeOpen);
 
   return (
     <header className="h-12 border-b border-[#333] flex items-center justify-between px-4 bg-[#252526] shrink-0 z-10">
@@ -63,4 +63,4 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ isRightPanelOpen, rightPan
       </div>
     </header>
   );
-};
+});

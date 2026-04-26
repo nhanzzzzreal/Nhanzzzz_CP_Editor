@@ -30,7 +30,9 @@ export const useCodeExecution = ({
   setIsDataDirty,
   formatLogMessage,
 }: UseCodeExecutionProps) => {
-  const { addLog, setRunStatus, setCurrentTestIndex } = useAppStore();
+  const addLog = useAppStore(state => state.addLog);
+  const setRunStatus = useAppStore(state => state.setRunStatus);
+  const setCurrentTestIndex = useAppStore(state => state.setCurrentTestIndex);
 
   const runSingleTestCase = useCallback(async (id: string) => {
     if (isFileLoading) {
@@ -46,7 +48,7 @@ export const useCodeExecution = ({
       return;
     }
 
-    const isPython = (settings as any).compiler.toLowerCase().includes('python');
+    const isPython = (settings as any)?.compiler?.toLowerCase().includes('python') || false;
     setRunStatus(isPython ? 'running' : 'compiling');
     addLog(`Running single testcase #${testcases.findIndex(t => t.id === id) + 1}...`);
     setTestcases(prev => prev.map(t => t.id === id ? { ...t, status: 'running', output: '', time: undefined } : t));
@@ -124,7 +126,7 @@ export const useCodeExecution = ({
     }
     setTestcases(prev => prev.map(tc => ({ ...tc, status: 'pending', output: '', time: -1, memory: -1 })));
     setCurrentTestIndex(0);
-    const isPython = (settings as any).compiler.toLowerCase().includes('python');
+    const isPython = (settings as any)?.compiler?.toLowerCase().includes('python') || false;
     setRunStatus(isPython ? 'running' : 'compiling');
     addLog(formatLogMessage(`Starting execution... (Syncing data with server)`));
     setIsDataDirty(false);

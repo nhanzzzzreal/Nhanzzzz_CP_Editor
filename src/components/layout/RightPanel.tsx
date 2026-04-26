@@ -1,37 +1,23 @@
-import React, { useMemo } from 'react';
+import React, { memo } from 'react';
 import { cn } from '../../lib/utils';
 import { TestcaseManager } from '../TestcaseManager';
 import { StressTest } from '../StressTest';
 import { useAppStore } from '../../store';
-import { useDataStore } from '../../dataStore';
 import { CodeEditorRef } from '../MonacoEditor';
-import { FileNode } from '../../types';
+import { useSessionStore } from '../../sessionStore';
 
 interface RightPanelProps {
   editorRef: React.RefObject<CodeEditorRef>;
-  isFileLoading: boolean;
-  setIsDataDirty: React.Dispatch<React.SetStateAction<boolean>>;
   handleOpenDiff: (expected: string, actual: string) => void;
   formatLogMessage: (msg: string) => string;
   isDiffSupported: boolean;
 }
 
-const findFileById = (id: string, nodes: FileNode[]): FileNode | null => {
-  for (const node of nodes) {
-    if (node.id === id) return node;
-    if (node.children) {
-      const found = findFileById(id, node.children);
-      if (found) return found;
-    }
-  }
-  return null;
-};
-
-export const RightPanel: React.FC<RightPanelProps> = ({ editorRef, isFileLoading, setIsDataDirty, handleOpenDiff, formatLogMessage, isDiffSupported }) => {
-  const { activeTab, setActiveTab, activeFileId } = useAppStore();
-  const { fileTree } = useDataStore();
-
-  const activeFile = useMemo(() => findFileById(activeFileId, fileTree), [activeFileId, fileTree]);
+export const RightPanel: React.FC<RightPanelProps> = memo(({ editorRef, handleOpenDiff, formatLogMessage, isDiffSupported }) => {
+  const activeTab = useAppStore(state => state.activeTab);
+  const setActiveTab = useAppStore(state => state.setActiveTab);
+  const activeSessionId = useSessionStore(state => state.activeSessionId);
+  const openSessionIds = useSessionStore(state => state.openSessionIds);
 
   return (
     <div className="h-full flex flex-col bg-[#252526] overflow-hidden border-l border-[#333]">
@@ -50,14 +36,29 @@ export const RightPanel: React.FC<RightPanelProps> = ({ editorRef, isFileLoading
         </button>
       </div>
 
-      <div className="flex-1 overflow-hidden">
-        <div className={cn("h-full", activeTab === 'testcases' ? 'block' : 'hidden')}>
-          <TestcaseManager editorRef={editorRef} activeFileId={activeFileId} activeFile={activeFile} isFileLoading={isFileLoading} setIsDataDirty={setIsDataDirty} onOpenDiff={handleOpenDiff} formatLogMessage={formatLogMessage} isDiffSupported={isDiffSupported} />
+      <div className="flex-1 overflow-hidden relative">
+        <div className={cn("absolute inset-0", activeTab === 'testcases' ? 'block' : 'hidden')}>
+          {openSessionIds.map(id => (
+            <div
+              key={id}
+              className="absolute inset-0 bg-[#252526]"
+              style={{
+                visibility: activeSessionId === id ? 'visible' : 'hidden',
+                zIndex: activeSessionId === id ? 10 : 0,
+                pointerEvents: activeSessionId === id ? 'auto' : 'none'
+              }}
+            >
+              <TestcaseManager editorRef={editorRef} sessionId={id} onOpenDiff={handleOpenDiff} formatLogMessage={formatLogMessage} isDiffSupported={isDiffSupported} />
+            </div>
+          ))}
+          {openSessionIds.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">Select a file to view testcases</div>
+          )}
         </div>
-        <div className={cn("h-full overflow-y-auto", activeTab === 'stress' ? 'block' : 'hidden')}>
+        <div className={cn("absolute inset-0 overflow-y-auto", activeTab === 'stress' ? 'block' : 'hidden')}>
           <StressTest />
         </div>
       </div>
     </div>
   );
-};
+});

@@ -3,6 +3,8 @@ import { Scissors, X, Plus, Trash2 } from 'lucide-react';
 import { Snippet } from '../types';
 import { cn } from '../lib/utils';
 
+const generateId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `snippet-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
 export const SnippetManagerModal = ({ isOpen, onClose, snippets, onUpdate }: {
   isOpen: boolean,
   onClose: () => void,
@@ -14,7 +16,7 @@ export const SnippetManagerModal = ({ isOpen, onClose, snippets, onUpdate }: {
   if (!isOpen) return null;
 
   const addSnippet = () => {
-    const newSnippet: Snippet = { id: crypto.randomUUID(), name: 'New Snippet', content: '' };
+    const newSnippet: Snippet = { id: generateId(), name: 'New Snippet', content: '' };
     onUpdate([...snippets, newSnippet]);
     setEditingSnippet(newSnippet);
   };

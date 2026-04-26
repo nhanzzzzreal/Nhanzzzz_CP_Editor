@@ -18,17 +18,6 @@ type AppState = {
   runStatus: 'idle' | 'compiling' | 'running';
   currentTestIndex: number;
 
-  // File Management State
-  openFileIds: string[];
-  activeFileId: string;
-  unsavedFileIds: Set<string>;
-  
-  // Monaco Editor Models State
-  monacoModels: Record<string, {
-    model: monaco.editor.ITextModel;
-    cursorState: monaco.editor.ICodeEditorViewState | null;
-  }>;
-
   // Actions
   // UI Actions
   setTerminalOpen: (isOpen: boolean) => void;
@@ -48,21 +37,6 @@ type AppState = {
   clearLogs: () => void;
   setRunStatus: (status: AppState['runStatus']) => void;
   setCurrentTestIndex: (index: number) => void;
-
-  // File Management Actions
-  setOpenFileIds: (ids: string[]) => void;
-  setActiveFileId: (id: string) => void;
-  openFile: (id: string) => void;
-  closeFile: (id: string) => void;
-  addUnsaved: (id: string) => void;
-  removeUnsaved: (id: string) => void;
-  
-  // Global Config Hydration
-  hydrate: (config: GlobalConfig) => void;
-
-  addMonacoModel: (fileId: string, model: monaco.editor.ITextModel) => void;
-  updateMonacoModelCursor: (fileId: string, cursorState: monaco.editor.ICodeEditorViewState | null) => void;
-  removeMonacoModel: (fileId: string) => void;
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -78,10 +52,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   logs: [],
   runStatus: 'idle',
   currentTestIndex: 0,
-  openFileIds: [],
-  activeFileId: '',
-  unsavedFileIds: new Set(),
-  monacoModels: {},
 
   // Actions
   setTerminalOpen: (isOpen) => set({ isTerminalOpen: isOpen }),
@@ -100,68 +70,4 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearLogs: () => set({ logs: [] }),
   setRunStatus: (status) => set({ runStatus: status }),
   setCurrentTestIndex: (index) => set({ currentTestIndex: index }),
-
-  setOpenFileIds: (ids) => set({ openFileIds: ids }),
-  setActiveFileId: (id) => set({ activeFileId: id }),
-  openFile: (id) => {
-    const { openFileIds } = get();
-    if (!openFileIds.includes(id)) {
-      set({ openFileIds: [...openFileIds, id], activeFileId: id });
-    } else {
-      set({ activeFileId: id });
-    }
-  },
-  closeFile: (id) => {
-    const { openFileIds, activeFileId } = get();
-    const newOpenFileIds = openFileIds.filter((oid) => oid !== id);
-    let newActiveFileId = activeFileId;
-
-    if (activeFileId === id) {
-      newActiveFileId = newOpenFileIds[newOpenFileIds.length - 1] || '';
-    }
-
-    set({ openFileIds: newOpenFileIds, activeFileId: newActiveFileId });
-  },
-  addUnsaved: (id) => set((state) => ({ unsavedFileIds: new Set(state.unsavedFileIds).add(id) })),
-  removeUnsaved: (id) => set((state) => {
-    const newSet = new Set(state.unsavedFileIds);
-    newSet.delete(id);
-    return { unsavedFileIds: newSet };
-  }),
-    
-  hydrate: (config) => {
-    if (config) {
-      set({
-        openFileIds: config.openFileIds || [],
-        activeFileId: config.activeFileId || '',
-      });
-    }
-  },
-
-  addMonacoModel: (fileId, model) => set((state) => ({
-    monacoModels: {
-      ...state.monacoModels,
-      [fileId]: { model, cursorState: null },
-    },
-  })),
-  updateMonacoModelCursor: (fileId, cursorState) => set((state) => {
-    const modelState = state.monacoModels[fileId];
-    if (modelState) {
-      return {
-        monacoModels: {
-          ...state.monacoModels,
-          [fileId]: { ...modelState, cursorState },
-        },
-      };
-    }
-    return state;
-  }),
-  removeMonacoModel: (fileId) => set((state) => {
-    const newModels = { ...state.monacoModels };
-    if (newModels[fileId]) {
-      newModels[fileId].model.dispose(); // Hủy model để giải phóng RAM khi đóng file
-      delete newModels[fileId];
-    }
-    return { monacoModels: newModels };
-  }),
 }));

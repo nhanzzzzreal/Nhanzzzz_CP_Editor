@@ -21,14 +21,16 @@ interface GlobalModalsProps {
 export const GlobalModals: React.FC<GlobalModalsProps> = ({
   isDiffOpen, setIsDiffOpen, diffExpected, diffActual, insertSnippet, formatLogMessage
 }) => {
-  const { 
-    isGlobalSettingsOpen, setIsGlobalSettingsOpen,
-    isSnippetManagerOpen, setIsSnippetManagerOpen,
-    isSnippetMenuOpen, setIsSnippetMenuOpen,
-    contextMenu
-  } = useAppStore();
+  const isGlobalSettingsOpen = useAppStore(state => state.isGlobalSettingsOpen);
+  const setIsGlobalSettingsOpen = useAppStore(state => state.setIsGlobalSettingsOpen);
+  const isSnippetManagerOpen = useAppStore(state => state.isSnippetManagerOpen);
+  const setIsSnippetManagerOpen = useAppStore(state => state.setIsSnippetManagerOpen);
+  const isSnippetMenuOpen = useAppStore(state => state.isSnippetMenuOpen);
+  const setIsSnippetMenuOpen = useAppStore(state => state.setIsSnippetMenuOpen);
+  const contextMenu = useAppStore(state => state.contextMenu);
   
-  const { globalConfig, saveGlobalConfig } = useDataStore();
+  const globalConfig = useDataStore(state => state.globalConfig);
+  const saveGlobalConfig = useDataStore(state => state.saveGlobalConfig);
   const { handleCreateItem, handleRenameNode, handleDeleteNode } = useTreeOperations(formatLogMessage);
 
   return (

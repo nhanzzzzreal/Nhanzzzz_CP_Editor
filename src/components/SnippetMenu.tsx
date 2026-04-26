@@ -49,7 +49,7 @@ export const SnippetMenu = ({ isOpen, onClose, snippets, onSelect }: {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-start justify-center pt-20 bg-black/20 backdrop-blur-[1px]">
-      <div className="bg-[#252526] border border-[#333] rounded-lg shadow-2xl w-full max-w-lg overflow-hidden flex flex-col animate-in fade-in zoom-in duration-150">
+      <div className="bg-[#252526] border border-[#333] rounded-lg shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
         <div className="p-2 border-b border-[#333] bg-[#1e1e1e]">
           <input 
             ref={inputRef}

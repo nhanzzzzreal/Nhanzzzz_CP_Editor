@@ -57,7 +57,7 @@ export const GlobalSettingsModal = ({ isOpen, onClose, globalSettings, onSave }:
           </button>
         </div>
 
-        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto scrollbar-thin scrollbar-thumb-[#333]">
+        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <InputGroup label="G++ Path" description="Đường dẫn đến trình biên dịch g++.">
               <input

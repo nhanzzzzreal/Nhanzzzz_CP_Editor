@@ -17,7 +17,7 @@ def get_db_info(code_file_path: str):
         return None, None
     folder_path = os.path.dirname(os.path.abspath(code_file_path))
     file_name = os.path.basename(code_file_path)
-    db_path = os.path.join(folder_path, "cpe_data.db")
+    db_path = os.path.join(folder_path, ".cpe", "cpe_data.db")
     return db_path, file_name
 
 def init_folder_db(db_path: str):
@@ -27,8 +27,6 @@ def init_folder_db(db_path: str):
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         
         conn = sqlite3.connect(db_path, timeout=5) # Timeout để tránh treo khi USB chậm
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
         
         # Bảng problems (thay thế problem_data cũ, lưu thông tin cơ bản về file code)
         conn.execute("""

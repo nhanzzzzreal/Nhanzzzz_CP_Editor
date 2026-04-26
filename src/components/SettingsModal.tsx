@@ -1,4 +1,5 @@
 import React, { Dispatch, SetStateAction, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Settings as SettingsIcon, X, Info } from 'lucide-react';
 import { AppSettings, CppSettings, PythonSettings } from '../types'; // Import all relevant types
 import { cn } from '../lib/utils';
@@ -54,8 +55,8 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, isPython
     }) as AppSettings); // Cast back to AppSettings
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <div className="bg-[#252526] border border-[#333] rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#333] bg-[#1e1e1e]">
           <div className="flex items-center gap-2 font-bold text-sm tracking-wide">
@@ -67,7 +68,7 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, isPython
           </button>
         </div>
 
-        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto scrollbar-thin scrollbar-thumb-[#333]">
+        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
           <div className="space-y-4">
             <div>
               <label className="block text-[10px] text-gray-500 mb-1.5 uppercase font-bold tracking-wider">Compiler Command</label>
@@ -257,6 +258,7 @@ export const SettingsModal = ({ isOpen, onClose, settings, setSettings, isPython
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

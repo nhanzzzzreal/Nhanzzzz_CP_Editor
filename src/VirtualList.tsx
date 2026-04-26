@@ -30,7 +30,7 @@ const VirtualListInner = <T,>({
 
   return (
     <Virtuoso
-      className={`h-full w-full scrollbar-thin scrollbar-thumb-[#444] scrollbar-track-transparent outline-none ${className}`}
+      className={`h-full w-full outline-none ${className}`}
       data={items}
       computeItemKey={(index, item: any) => item?.id || index}
       itemContent={(index, item) => (

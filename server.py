@@ -76,6 +76,11 @@ loop = None
 
 class WorkspaceEventHandler(FileSystemEventHandler):
     def on_any_event(self, event):
+        # TỐI ƯU CỰC HẠN: Bỏ qua sự kiện thay đổi nội dung file (Autosave, gõ code).
+        # Chỉ quan tâm đến việc tạo, xóa, đổi tên file/thư mục.
+        if event.event_type == 'modified':
+            return
+            
         if hasattr(event, 'src_path'):
             path = event.src_path.replace("\\", "/")
             if "/.cpe" in path or "/.git" in path or path.endswith("cpe_global_config.json") or path.endswith("~"):
@@ -460,9 +465,6 @@ def get_file_data(path: str):
             pass # File C++ nhưng DB lưu là Python -> Bỏ qua, dùng default
         else:
             default_settings_dict.update(saved_settings)
-    else:
-        # Nếu không có cài đặt nào trong DB, dùng mặc định và khởi tạo DB
-        database.save_problem_data(path, default_settings_dict, [])
 
     # Tạo đối tượng Pydantic từ dữ liệu đã hợp nhất
     if is_python_file:
